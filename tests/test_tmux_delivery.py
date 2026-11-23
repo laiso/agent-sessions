@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +16,7 @@ from agent_sessions.cli import main
 @unittest.skipUnless(shutil.which("tmux"), "tmux is not installed")
 class TmuxDeliveryTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="agent-sessions-test-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="as-tmux-", dir="/tmp" if platform.system() == "Darwin" else None)
         self.addCleanup(self.tmp.cleanup)
         self.env = dict(os.environ, TMUX_TMPDIR=self.tmp.name)
         self.env.pop("TMUX", None)

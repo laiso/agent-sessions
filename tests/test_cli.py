@@ -50,6 +50,8 @@ class CliTests(unittest.TestCase):
         calls = []
 
         def runner(argv):
+            if argv[0] == "ps":
+                return response()
             calls.append(argv[0])
             if argv[0] == "herdr":
                 data = fixture("herdr_snapshot") if argv[1] == "api" else {}

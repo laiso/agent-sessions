@@ -1,5 +1,8 @@
 import socket
+import tempfile
+from pathlib import Path
 import unittest
+from unittest.mock import Mock, patch
 
 from support import response
 from agent_sessions.model import SourceError
@@ -63,11 +66,40 @@ class TmuxTests(unittest.TestCase):
         self.assertEqual(row.pane, f"1.0 kk@{host}-other:/x")
 
     def test_read_child_falls_back_to_own_cmdline(self):
-        import os
-        argv = read_child(str(os.getpid()))
-        self.assertTrue(argv)
-        self.assertEqual(read_child("not-a-pid"), [])
-        self.assertEqual(read_child("999999999"), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            (proc / "123/task/123").mkdir(parents=True)
+            (proc / "123/task/123/children").touch()
+            (proc / "123/cmdline").write_bytes(b"sleep\000300\000")
+            with patch("agent_sessions.tmux.Path", return_value=proc):
+                self.assertEqual(read_child("123"), ["sleep", "300"])
+                self.assertEqual(read_child("not-a-pid"), [])
+                self.assertEqual(read_child("999999999"), [])
+
+    def test_darwin_ps_snapshot(self):
+        panes = record() + "\n" + record(idx="1").replace("\x1f123\x1f", "\x1f55\x1f")
+        ps = "  123   1 bash\n 1010 123 node   /bin/claude --resume\n 99 123 vim\n 2010 1010 git\n 55 1 sleep 300"
+        runner = Mock(side_effect=[response(panes), response(ps)])
+        rows = collect(runner, system="Darwin")
+        self.assertEqual([(r.command, r.agent) for r in rows],
+                         [("node   /bin/claude --resume", "claude"), ("sleep 300", None)])
+        self.assertEqual(runner.call_count, 2)
+        self.assertEqual(runner.call_args.args[0], ["ps", "-A", "-ww", "-o", "pid=,ppid=,args="])
+
+    def test_darwin_ps_fallback(self):
+        for bad in (response(code=1), FileNotFoundError(), UnicodeError(), response("123 1 codex\nbad"),
+                    response("33 1 unrelated")):
+            with self.subTest(bad=bad):
+                runner = Mock(side_effect=[response(record()), bad])
+                row, = collect(runner, system="Darwin")
+                self.assertEqual((row.command, row.status), ("bash", "shell"))
+
+    def test_unknown_platform_uses_tmux_name(self):
+        runner = Mock(return_value=response(record()))
+        with patch("agent_sessions.tmux.read_child", side_effect=AssertionError):
+            row, = collect(runner, system="Windows")
+        self.assertEqual(row.command, "bash")
+        runner.assert_called_once()
 
     def test_agent_name_only_from_executable_or_script(self):
         row, = self.read(record(), argv=["vim", "claude"])

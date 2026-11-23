@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 import stat
 from collections.abc import Iterator, Mapping
 from functools import partial
@@ -9,18 +10,28 @@ from .model import Session, SourceError
 from .runner import Runner, output, run
 
 
-def cli_candidates(env: Mapping[str, str]) -> Iterator[str]:
+def cli_candidates(env: Mapping[str, str], *, system: str | None = None, root: Path = Path("/")) -> Iterator[str]:
     explicit = env.get("AGENT_SESSIONS_ORCA") or env.get("ORCA_CLI_COMMAND")
     if explicit:
         yield explicit
         return
 
     home = Path(env["HOME"]) if env.get("HOME") else Path.home()
-    config = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
-    if not config.is_absolute():
-        config = home / ".config"
-    installations = (config / "orca/linux-orca-cli-shim/orca", home / ".local/opt/orca/orca.AppImage")
-    for path in installations:
+    system = platform.system() if system is None else system
+    if system == "Darwin":
+        bundle = Path("Applications/Orca Desktop.app/Contents/MacOS/orca")
+        shim = home / ".local/bin/orca"
+        binaries = (root / bundle, home / bundle)
+    elif system == "Linux":
+        config = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
+        if not config.is_absolute():
+            config = home / ".config"
+        shim = config / "orca/linux-orca-cli-shim/orca"
+        binaries = (home / ".local/opt/orca/orca.AppImage",)
+    else:
+        return
+
+    for path in (shim, *binaries):
         if not path.is_absolute():
             continue
         try:
@@ -30,6 +41,8 @@ def cli_candidates(env: Mapping[str, str]) -> Iterator[str]:
         if (stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
                 and not info.st_mode & 0o022 and os.access(path, os.X_OK)):
             yield str(path)
+            if path != shim:
+                return  # Only a shim can fall back to another installation.
 
 
 def records(runner: Runner, argv: list[str], key: str) -> list[dict]:

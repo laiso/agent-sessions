@@ -1,6 +1,8 @@
 # agent-sessions
 
-Herdr・tmux のペインと Orca のボットを、エージェント名・状態・前面のコマンド・作業ディレクトリとともに表示します。Python 3.11 以上で、インストールせずに使えます。
+List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and send messages to panes.
+
+Run the launcher from the repository with Python 3.11 or later. No Python packages are required.
 
 ```sh
 ./agent-sessions
@@ -10,62 +12,84 @@ Herdr・tmux のペインと Orca のボットを、エージェント名・状�
 ./agent-sessions --no-header --width 100
 ```
 
-出力例
+Example output:
 
 ```text
-SOURCE  SESSION       PANE  AGENT  STATUS   COMMAND                             CWD
-herdr   wsh-2027-pre  1     agy    idle     agy --dangerously-skip-permissions  ~/Work/laiso/wsh-2027-pre
-herdr   wsh-2027-pre  2     -      unknown  /usr/bin/bash                       ~/Work/laiso/wsh-2027-pre
-tmux    demo          0.0   -      shell    bash                                ~/src/app
+SOURCE  SESSION  PANE  AGENT  STATUS   COMMAND          CWD
+herdr   my-app   1     agy    idle     agy              ~/work/my-app
+tmux    demo     0.0   -      running  sleep 300        ~/work/demo
+orca    helper   home  codex  idle     Code review      ~/work/helper
 ```
 
-| オプション | 動作 |
+| Option | Description |
 |---|---|
-| `--source all\|herdr\|tmux\|orca` | 既定は `all`。Herdr、tmux、Orca の順に読みます。 |
-| `--format table\|json` | 既定は表。JSON 配列にはペイン ID、フォーカス状態、短縮前のパスも含みます。 |
-| `--agents-only` | エージェント名のあるペインと Orca の全ボットを表示します。 |
-| `--no-header` | 表の見出しを省きます。 |
-| `--width N` | 表の幅を指定します。既定は端末幅で、パイプでは全長を出力します。 |
+| `--source all\|herdr\|tmux\|orca` | Sources to read (`all` queries Herdr, tmux, then Orca). Defaults to `all`. |
+| `--format table\|json` | Defaults to a table. JSON also includes pane IDs, focus state, and full paths. |
+| `--agents-only` | Show panes with an identified agent and all Orca bots. |
+| `--no-header` | Omit the table header. |
+| `--width N` | Table width (untruncated when piped). |
 
-Herdr はエージェントの内部状態を表示します。tmux の `running` はプロセスの実行中を表します。Linux では tmux ペインの子プロセスの引数を読み、取得できない場合は tmux のコマンド名を表示します。
+Herdr reports the agent’s internal status. In tmux, `running` indicates a non-shell foreground process, `shell` a shell prompt, and `dead` a dead pane.
 
-Orca の行はボットごとに1行です。SESSION はボット名、PANE は `home`、COMMAND は専門分野、CWD はホームのパスを表示します。ボットが一時停止中なら `paused`、ホームにエージェントがいなければ `stopped` です。ホームを取得できない場合もボットを表示します。JSON の `specialty` は専門分野で、未設定のボットと他のソースでは `null` です。
+Each Orca row represents one bot. SESSION is its name, PANE is `home`, COMMAND is its specialty, and CWD is its home worktree. A paused bot shows `paused`; a home with no agents shows `stopped`. Bots remain visible when their home cannot be read. JSON includes `specialty`, which is null for other sources and for bots without a specialty.
 
-Orca CLI は `AGENT_SESSIONS_ORCA`、`ORCA_CLI_COMMAND` の順で明示指定を優先します。自動検出では PATH を探索せず、登録済み shim（`${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca`）、`~/.local/opt/orca/orca.AppImage` の順に直接調べます。リンク先を含め、自動候補には実行可能な通常ファイルで、所有者が実行ユーザーか root、グループと他人に書き込み権限がないものを使います。自動選択した shim が `Orca CLI is unavailable` と応答した場合は、AppImage でその照会を1回だけ再試行します。別の場所の CLI は環境変数で指定してください。
+Listing exits with `0` when at least one source can be read, `2` for invalid arguments, or `3` when all requested sources fail. A missing tmux server counts as an empty result. With `--source orca` alone, an unreadable bot list produces an empty result and exits silently with `0`. With `--source all`, an unreadable Orca source does not count as a success. If Herdr and tmux also fail, the exit code is `3`.
 
-Orca への照会は `bot list --json` と `worktree ps --json` で、各呼び出しを最大15秒待ちます。Orca のボットは一覧専用です。
+## Platforms and Orca discovery
 
-終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。`--source orca` 単独でボット一覧を取得できない場合も警告なしの0件・終了 `0` です。`all` では取得できなかった Orca は成功ソースに数えません。
+Linux is the primary platform. Linux reads tmux process arguments from `/proc`. On macOS, one `ps` snapshot per collection supplies the newest direct child’s command, or the pane process’s own command. Both platforms fall back to the tmux command name when process details are unavailable. macOS reports arguments as one string, so agent identification is less precise for paths containing spaces.
 
-テストはリポジトリ直下で `python3 -m unittest discover -s tests` を実行してください。仕様の詳細は [設計書](docs/design.md) にあります。
+Set `AGENT_SESSIONS_ORCA` to select a CLI explicitly. It takes precedence over `ORCA_CLI_COMMAND`. Otherwise the launcher checks only these known locations, in order, without searching PATH:
 
-## 実機 E2E テスト
+| Platform | Registered shim | Application, in search order |
+|---|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca` | `~/.local/opt/orca/orca.AppImage` |
+| macOS | `~/.local/bin/orca` (Orca Settings → General → Orca CLI) | `/Applications/Orca Desktop.app/Contents/MacOS/orca`, then `~/Applications/Orca Desktop.app/Contents/MacOS/orca` |
 
-リポジトリ直下で `./run-e2e-tests.sh` を実行すると、実際の CLI を通して10の場面を検証します。Orca は shim がない場合と、古い shim から AppImage に切り替える場合も確認します。全件を実行するには、1ペイン以上ある Herdr、tmux コマンド、既知の場所の AppImage から一覧を取得できる起動中の Orca とボットが必要です。前提が足りない場面は理由付きで skip します。`E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` はひとつでも前提が足りないと失敗します。
+Automatic candidates must resolve to executable regular files owned by the current user or root, without group or other write permission. If the registered shim reports `Orca CLI is unavailable`, the launcher retries that query once with the first eligible application. The only Orca queries are `bot list --json` and `worktree ps --json`, with a 15-second timeout each.
 
-Herdr には一覧取得と `send --dry-run` だけを使い、Orca にはボットとワークツリーの読み取りだけを行います。実送信は一時ディレクトリで起動した隔離 tmux の `cat` ペイン宛てです。テスト終了時にそのサーバーと一時ディレクトリを片付けます。
+## Send a message
 
-## ペインにメッセージを送る
-
-`send` は一覧と同じ情報から対象を解決し、そのペイン ID に本文と Enter を送ります。シェルが開いているペインでは、既定の Enter により入力したコマンドが実行されます。
+Preview the target and message with `--dry-run`. By default, `send` follows the message with Enter, which can execute a command at a shell prompt. Use `--no-enter` to leave the message unsubmitted.
 
 ```sh
-./agent-sessions send --dry-run herdr:wsh-2027-pre/1 '進捗を教えてください'
-./agent-sessions send herdr:wN:pH '進捗を教えてください'
+./agent-sessions send --dry-run herdr:my-app/1 'How is the build going?'
+./agent-sessions send herdr:wN:pH 'How is the build going?'
 ./agent-sessions send tmux:demo echo hello
 ./agent-sessions send --no-enter tmux:demo:0.0 -- '--help'
-./agent-sessions send --dry-run --format json tmux:%12 '次の作業は？'
+./agent-sessions send --dry-run --format json tmux:%12 'What is next?'
 ```
-
-最初の例の出力
 
 ```text
-Would send to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
-> 進捗を教えてください ⏎
+Would send to herdr my-app/1 (wN:pH) [agy, idle]
+> How is the build going? ⏎
 ```
 
-Herdr は `herdr:<セッション>/<ペイン>` または `herdr:<ペインID>`、tmux は `tmux:<セッション>`、`tmux:<セッション>:<窓>.<ペイン>`、`tmux:%<ID番号>` で指定します。tmux のセッション名だけを指定すると、そのセッションのアクティブなペインを選びます。名前での指定は接頭辞を省くと両方のソースを検索し、候補が複数あれば一覧を stderr に出します。
+Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `wN:pH` and `%12` require it. Ambiguous matches print the candidates to stderr. Orca bots are list-only.
 
-本文の引数は空白1つで連結します。ハイフンから始まる本文の前には `--` を置きます。本文は4096文字までで、空白だけの本文と、タブ・改行などの制御文字は使えません（タブはシェルの補完キーとして届くため）。`--no-enter` は入力のみ、`--dry-run` は対象と本文のプレビューです。
+Message arguments are joined with one space. Put `--` before a message starting with a hyphen. Messages must contain non-whitespace text and may contain up to 4096 characters. Tabs, newlines and other control characters are rejected.
 
-`send` の終了コードは成功・プレビューが `0`、引数エラーが `2`、全ソースの読み取り失敗が `3`、対象なし・終了済みペインが `4`、複数候補が `5`、送信失敗が `6` です。
+| Send exit code | Meaning |
+|---|---|
+| 0 | Sent or previewed |
+| 2 | Invalid arguments or message |
+| 3 | All requested sources failed |
+| 4 | Target missing or dead pane |
+| 5 | Ambiguous target |
+| 6 | Delivery failed |
+
+## Tests
+
+Run these commands from the repository root:
+
+```sh
+python3 -m unittest discover -s tests
+./run-e2e-tests.sh
+E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh
+```
+
+The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
+
+Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
+
+macOS discovery and process collection have been checked with platform-substituted unit tests only. Live macOS validation is pending: the designated Mac mini lacked Orca and SSH public-key access was unavailable. The [design specification](docs/design.md) is in Japanese.

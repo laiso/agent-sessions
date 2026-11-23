@@ -1,3 +1,4 @@
+import platform
 import re
 import socket
 from collections.abc import Callable
@@ -122,11 +123,39 @@ def default_title(title: str, hosts: set[str]) -> bool:
     return any(re.fullmatch(r"[^@\s]+@" + re.escape(host) + r"(?::.*|\s+[~/].*)?", title) for host in hosts)
 
 
-def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child) -> list[Session]:
+def mac_commands(runner: Runner) -> dict[str, str]:
+    """Index one ps snapshot by pane PID, preferring the newest direct child."""
+    try:
+        raw = output(runner, ["ps", "-A", "-ww", "-o", "pid=,ppid=,args="])
+    except SourceError:
+        return {}
+    commands = {}
+    newest = {}
+    for line in raw.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) < 2 or not all(value.isascii() and value.isdigit() for value in fields[:2]):
+            return {}
+        pid, parent = map(int, fields[:2])
+        if len(fields) == 3:
+            commands[pid] = fields[2]
+        if pid > newest.get(parent, -1):
+            newest[parent] = pid
+    return {str(pid): commands.get(newest.get(pid), commands.get(pid, ""))
+            for pid in commands.keys() | newest.keys()}
+
+
+def collect(runner: Runner, proc_reader: Callable[[str], list[str]] | None = None,
+            *, system: str | None = None) -> list[Session]:
     fmt = SEPARATOR.join("#{" + name + "}" for name in FIELDS)
     fmt += SEPARATOR + DELIVERY_IDENTITY
     raw = output(runner, ["tmux", "list-panes", "-a", "-F", fmt],
                  empty_errors=("no server running", "error connecting"))
+    if not raw:
+        return []
+    system = platform.system() if system is None else system
+    commands = mac_commands(runner) if system == "Darwin" and proc_reader is None else {}
+    if proc_reader is None and system == "Linux":
+        proc_reader = read_child
     hosts = {socket.gethostname(), socket.gethostname().split(".")[0]}
     rows = []
     for line in raw.split("\n"):
@@ -139,7 +168,9 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
             focused = int(attached) > 0 and is_active
         except ValueError as exc:
             raise SourceError("invalid tmux list-panes record") from exc
-        argv = proc_reader(shell_pid) or ([current] if current else [])
+        command = commands.get(shell_pid, "")
+        argv = proc_reader(shell_pid) if proc_reader else command.split()
+        argv = argv or ([current] if current else [])
         names = [Path(arg).name for arg in argv]
         agent = agent_name(argv)
         status = "running"
@@ -151,5 +182,5 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         if title and not default_title(title, hosts):
             pane += " " + title
         rows.append((key, TmuxSession("tmux", session, pane, pid, agent, status,
-                                  " ".join(argv) or None, cwd or None, focused, is_active, identity)))
+                                  command or " ".join(argv) or None, cwd or None, focused, is_active, identity)))
     return [row for _, row in sorted(rows, key=lambda item: item[0])]

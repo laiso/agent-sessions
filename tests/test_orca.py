@@ -85,7 +85,7 @@ class OrcaTests(unittest.TestCase):
 
     def test_no_cli(self):
         with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home, "PATH": home}, clear=True):
-            with self.assertRaises(SourceError):
+            with patch("platform.system", return_value="Linux"), self.assertRaises(SourceError):
                 orca.collect(self.runner)
         self.assertEqual(self.calls, [])
 
@@ -107,6 +107,9 @@ class OrcaTests(unittest.TestCase):
 
 class PathDiscoveryTests(unittest.TestCase):
     def setUp(self):
+        system = patch("platform.system", return_value="Linux")
+        system.start()
+        self.addCleanup(system.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         home = Path(tmp.name)
@@ -209,3 +212,44 @@ class PathDiscoveryTests(unittest.TestCase):
         self.assertEqual(next(orca.cli_candidates(self.env), None), str(image))
         self.env["AGENT_SESSIONS_ORCA"] = "/nonexistent"
         self.assertEqual(next(orca.cli_candidates(self.env), None), "/nonexistent")
+
+    def test_platform_installations(self):
+        home = Path(self.env["HOME"])
+        root = home / "root"
+        bundle = "Applications/Orca Desktop.app/Contents/MacOS/orca"
+        shim, system_app, user_app = home / ".local/bin/orca", root / bundle, home / bundle
+        for path in (shim, system_app, user_app):
+            path.parent.mkdir(parents=True)
+            self.executable(path)
+
+        def candidates(system):
+            return list(orca.cli_candidates(self.env, system=system, root=root))
+
+        self.assertEqual(candidates("Linux"), list(map(str, (self.shim, self.image))))
+        self.assertEqual(candidates("Windows"), [])
+        self.assertEqual(candidates("Darwin"), list(map(str, (shim, system_app))))
+        system_app.chmod(0o777)
+        self.assertEqual(candidates("Darwin"), list(map(str, (shim, user_app))))
+        shim.chmod(0o600)
+        self.assertEqual(candidates("Darwin"), [str(user_app)])
+        self.env["ORCA_CLI_COMMAND"] = "/explicit"
+        self.assertEqual(candidates("Windows"), ["/explicit"])
+
+    def test_macos_stale_shim_only_retries_first_eligible_bundle(self):
+        home = Path(self.env["HOME"])
+        root = home / "root"
+        bundle = "Applications/Orca Desktop.app/Contents/MacOS/orca"
+        shim, app = home / ".local/bin/orca", root / bundle
+        for path in (shim, app, home / bundle):
+            path.parent.mkdir(parents=True)
+            self.executable(path)
+
+        candidates = orca.cli_candidates(self.env, system="Darwin", root=root)
+        runner = Mock(side_effect=[response(stderr="Orca CLI is unavailable", code=1),
+                                   response(json.dumps(fixture("orca_bot_list"))),
+                                   response(stderr="Orca CLI is unavailable", code=1)])
+        with patch.object(orca, "cli_candidates", return_value=candidates):
+            self.assertEqual(len(orca.collect(runner)), 3)
+        self.assertEqual([c.args[0] for c in runner.call_args_list],
+                         [[str(shim), "bot", "list", "--json"], [str(app), "bot", "list", "--json"],
+                          [str(app), "worktree", "ps", "--json"]])

@@ -22,6 +22,8 @@ class SendTests(unittest.TestCase):
         self.out = io.StringIO()
 
     def runner(self, argv):
+        if argv[0] == "ps":
+            return response()
         if argv[0] in self.read_fail:
             return response(stderr="connection failed", code=1)
         if argv == ["herdr", "api", "snapshot"]:

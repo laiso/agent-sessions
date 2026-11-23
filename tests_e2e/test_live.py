@@ -1,6 +1,8 @@
 """End-to-end checks of the repository launcher against local tools."""
 import json
 import os
+import platform
+import sys
 from pathlib import Path
 import shutil
 import stat
@@ -12,11 +14,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = "e2e-日本語"
 APPIMAGE = Path.home() / ".local/opt/orca/orca.AppImage"
+MAC_BUNDLE = Path("Applications/Orca Desktop.app/Contents/MacOS/orca")
 
 
 class LiveTests(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(prefix="agent-sessions-e2e-")
+        tmp = tempfile.TemporaryDirectory(prefix="as-e2e-", dir="/tmp" if platform.system() == "Darwin" else None)
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
         self.env = dict(os.environ, TMUX_TMPDIR=tmp.name)
@@ -55,16 +58,21 @@ class LiveTests(unittest.TestCase):
             self.unavailable("Herdr has no panes")
         return data
 
+    def orca_binary(self):
+        paths = ([Path("/") / MAC_BUNDLE, Path.home() / MAC_BUNDLE]
+                 if platform.system() == "Darwin" else [APPIMAGE])
+        for path in paths:
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            if (stat.S_ISREG(info.st_mode) and info.st_uid in (0, os.geteuid())
+                    and not info.st_mode & 0o022 and os.access(path, os.X_OK)):
+                return path
+        self.unavailable("no eligible Orca application at a known location")
+
     def bots(self):
-        image = APPIMAGE
-        try:
-            info = image.stat()
-        except OSError:
-            self.unavailable("known Orca AppImage is missing")
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.geteuid())
-                or info.st_mode & 0o022 or not os.access(image, os.X_OK)):
-            self.unavailable("known Orca AppImage is not eligible for execution")
-        data = self.reference(str(image), "bot", "list", "--json")
+        data = self.reference(str(self.orca_binary()), "bot", "list", "--json")
         if not isinstance(data, dict) or data.get("ok") is not True:
             self.unavailable("Orca bot list unavailable")
         result = data.get("result")
@@ -95,18 +103,37 @@ class LiveTests(unittest.TestCase):
 
     def test_E2_tmux_session(self):
         self.start_tmux()
-        self.tmux("split-window", "-d", "-t", SESSION, "cat")
+        sleeper = self.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", SESSION,
+                            "sh", "-c", "sleep 300; :")
         name = self.tmux("list-sessions", "-F", "#{session_name}")
         ids = self.tmux("list-panes", "-t", SESSION, "-F", "#{pane_id}").splitlines()
         self.assertEqual((name, len(ids)), (SESSION, 2))
-        rows = json.loads(self.cli("--source", "tmux", "--format", "json"))
-        self.assertCountEqual([(r["session"], r["pane_id"]) for r in rows], [(name, pid) for pid in ids])
+        deadline = time.monotonic() + 2
+        while True:
+            rows = json.loads(self.cli("--source", "tmux", "--format", "json"))
+            self.assertCountEqual([(r["session"], r["pane_id"]) for r in rows], [(name, pid) for pid in ids])
+            command = next(r["command"] for r in rows if r["pane_id"] == sleeper)
+            if command == "sleep 300":
+                break
+            if time.monotonic() >= deadline:
+                self.fail(f"expected sleep 300 in {sleeper}, got {command!r}")
+            time.sleep(0.02)
+
+    def discovery_env(self):
+        # Keep the test interpreter even if the system Python is older (e.g. macOS).
+        env = dict(self.env, PATH="/usr/bin:/bin")
+        if platform.system() == "Darwin":
+            tools = self.tmp / "bin"
+            tools.mkdir()
+            (tools / "python3").symlink_to(sys.executable)
+            env["PATH"] = f"{tools}:{env['PATH']}"
+        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
+            env.pop(name, None)
+        return env
 
     def test_E3_orca_without_path(self):
         bots = self.bots()
-        env = dict(self.env, PATH="/usr/bin:/bin")
-        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
-            env.pop(name, None)
+        env = self.discovery_env()
         rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
 
@@ -136,9 +163,11 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(launches, [[argv[0], argv] for argv in expected])
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
 
+    @unittest.skipUnless(platform.system() == "Linux", "not Linux")
     def test_E3b_orca_appimage_only(self):
         self.check_appimage_route(stale_shim=False)
 
+    @unittest.skipUnless(platform.system() == "Linux", "not Linux")
     def test_E3c_orca_stale_shim_falls_back_to_appimage(self):
         self.check_appimage_route(stale_shim=True)
 
@@ -181,11 +210,12 @@ class LiveTests(unittest.TestCase):
         fake = self.tmp / "orca"
         fake.write_text('#!/bin/sh\n: > "$E2E_MARKER"\n')
         fake.chmod(0o700)
-        env = dict(self.env, HOME=str(self.tmp), XDG_CONFIG_HOME=str(self.tmp),
-                   PATH=f"{self.tmp}:{os.defpath}", E2E_MARKER=str(marker))
-        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
-            env.pop(name, None)
-        self.assertEqual(json.loads(self.cli("--source", "orca", "--format", "json", env=env)), [])
+        env = dict(self.discovery_env(), HOME=str(self.tmp), XDG_CONFIG_HOME=str(self.tmp),
+                   E2E_MARKER=str(marker))
+        env["PATH"] = f"{self.tmp}:{env['PATH']}"
+        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        if platform.system() != "Darwin":
+            self.assertEqual(rows, [])  # Darwin can still discover a system-wide bundle.
         self.assertFalse(marker.exists())
 
     def test_E8_tmux_send(self):
@@ -200,3 +230,22 @@ class LiveTests(unittest.TestCase):
             if time.monotonic() > deadline:
                 self.fail("cat did not receive and echo the submitted line")
             time.sleep(0.02)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "not macOS")
+    def test_E9_macos_orca_bundle(self):
+        binary = self.orca_binary()
+        bots = self.bots()
+        # Hide the registered user shim while retaining access to app state.
+        home = self.tmp / "home"
+        home.mkdir()
+        for name in ("Applications", "Library", ".orca", ".config"):
+            (home / name).symlink_to(Path.home() / name, target_is_directory=True)
+        log = self.tmp / "launches.jsonl"
+        env = dict(self.discovery_env(), HOME=str(home), PYTHONPATH=str(ROOT / "tests_e2e/trace"),
+                   AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
+        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
+        expected = str(binary if binary == Path("/") / MAC_BUNDLE else home / MAC_BUNDLE)
+        self.assertEqual([json.loads(line) for line in log.read_text().splitlines()],
+                         [[expected, [expected, *query, "--json"]]
+                          for query in (("bot", "list"), ("worktree", "ps"))])
