@@ -1,4 +1,4 @@
-# agent-sessions 設計書 v1
+# agent-sessions 設計書 v2（v1 ＋ send コマンド）
 
 作成: claude（設計・レビュー・テスト担当）／実装: codex
 
@@ -179,6 +179,99 @@ tests/
 3. `./agent-sessions --format json | python3 -m json.tool` が通る
 4. tmux で `tmux new -d -s demo` を作ったあと、`./agent-sessions --source tmux` に `demo` が出る（確認後 `tmux kill-session -t demo`）
 5. README.md に使い方と出力例
+
+## 10. send コマンド（v2）
+
+### 10.1 コマンドの形
+
+```
+agent-sessions [list] [一覧のオプション…]               # 従来どおり（list は省略可）
+agent-sessions send [--no-enter] [--dry-run] [--format {text,json}] <対象> [--] <メッセージ>...
+```
+
+- 第1引数が `send` のときだけ send として解釈し、それ以外（`list` か省略）はこれまでの一覧として扱う。既存の呼び出し方（`agent-sessions --source tmux` など）を壊さないこと。
+- `<メッセージ>` は複数の引数を空白1つでつないだ文字列。`-` で始まるメッセージは `--` の後ろに書く。
+- 既定では、テキストを送ったあとに Enter を1回送る。`--no-enter` で Enter を送らない。
+- `--dry-run`：対象の解決と表示だけを行い、実際には送らない。
+
+### 10.2 対象の指定
+
+一覧の表に出ている値をそのまま使えるようにする。
+
+| 書き方 | 意味 |
+|---|---|
+| `herdr:<SESSION>/<PANE>` | Herdr のワークスペースのラベルと、一覧の PANE 列の値 |
+| `herdr:<pane_id>` | Herdr のペイン ID（例：`wN:pH`） |
+| `tmux:<SESSION>` | tmux のセッションの、アクティブなペイン（`pane_active` かつ `window_active`） |
+| `tmux:<SESSION>:<窓>.<ペイン>` | tmux の特定のペイン（一覧の PANE 列の先頭 `1.2` と同じ番号） |
+| `tmux:%<n>` | tmux のペイン ID |
+| 接頭辞なし（`<SESSION>/<PANE>` や `<SESSION>`） | 両方のソースから探す。herdr の `<SESSION>/<PANE>`、tmux の `<SESSION>`、`<SESSION>:<窓>.<ペイン>` のどれかに一致するもの |
+
+- 解決には一覧と同じ収集処理（`herdr.collect` / `tmux.collect`）を使う。つまり「送る前に存在を確認する」は、収集結果から対象を見つけることで行う。
+- 比較は完全一致（大文字と小文字を区別）。PANE 名に `#<pane_id>` が付いた重複名もそのまま指定できる。
+- セッション名やペイン名に `/` や `:` が含まれる場合に備え、接頭辞付きの書き方では、herdr は最後の `/` で、tmux は最後の `:` で分割する。それでも一致しなければ、分割せずに全体をセッション名として探す。
+- 一致が0件：エラー（終了コード 4）。stderr に `agent-sessions: send: target not found: <対象>` と、近い候補（セッション名が一致するペイン、最大5件）を出す。
+- 一致が2件以上：エラー（終了コード 5）。stderr に候補をすべて `herdr:<SESSION>/<PANE>` か `tmux:<SESSION>:<窓>.<ペイン>` の形で出す。
+- 対象のソースが読めない場合（herdr サーバー停止など）：一覧と同じ警告を出し、ほかのソースで探す。すべて読めなければ終了コード 3。
+- tmux の状態が `dead` のペインは、送り先として選べない（終了コード 4、理由に dead と書く）。
+
+### 10.3 メッセージの検証
+
+- 空のメッセージ（空白だけを含む）はエラー（終了コード 2）。
+- 制御文字（タブ以外。改行や ESC を含む）を含むメッセージはエラー（終了コード 2）。端末へのエスケープシーケンスの注入と、途中の改行による意図しない送信を防ぐため。
+- 長さの上限は 4096 文字（超えたら終了コード 2）。
+
+### 10.4 送り方
+
+外部コマンドはシェルを使わず、一覧と同じ `Runner` で実行する（テストで差し替えられること）。
+
+- Herdr：
+  1. `herdr pane send-text <pane_id> <メッセージ>`（メッセージが `-` で始まる場合でも誤解釈されない形にする。実装時に herdr の引数解析で確かめ、必要なら `--` を挟む）
+  2. Enter を送る場合：`herdr pane send-keys <pane_id> enter`（キー名は実装時に herdr で確かめる）
+- tmux：
+  1. `tmux send-keys -t <pane_id> -l -- <メッセージ>`（`-l` で文字どおり送る。キー名として解釈させない）
+  2. Enter を送る場合：`tmux send-keys -t <pane_id> Enter`
+- 対象は必ず ID（herdr の pane_id、tmux の `%n`）で指定する。名前で指定すると、解決から送信までの間に別のペインに当たるおそれがあるため。
+- 送信コマンドが失敗したら終了コード 6。stderr に `agent-sessions: send: <理由>`（§3 と同じ JSON の error.message の扱い）。テキストは送れて Enter だけ失敗した場合も 6 とし、そのことを理由に書く。
+
+### 10.5 送ったあとの表示
+
+既定（`--format text`）は stdout に2行。
+
+```
+Sent to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
+> 進捗を教えてください ⏎
+```
+
+- 1行目：ソース、`<SESSION>/<PANE>`（tmux は `<SESSION>:<窓>.<ペイン>`）、ID、AGENT と STATUS（AGENT がなければ STATUS だけ）。
+- 2行目：`> ` に続けて送った内容。Enter を送った場合は末尾に ` ⏎` を付ける。
+- `--dry-run` のときは1行目を `Would send to …` にする。
+- `--format json`：`{"sent": true|false, "dry_run": bool, "enter": bool, "target": {一覧の JSON と同じ形のオブジェクト}, "message": "…"}`。
+
+### 10.6 終了コード（send）
+
+| コード | 意味 |
+|---|---|
+| 0 | 送った（`--dry-run` なら、解決できた） |
+| 2 | 引数の誤り、メッセージの検証エラー |
+| 3 | すべてのソースが読めない |
+| 4 | 対象が見つからない（dead を含む） |
+| 5 | 対象があいまい（2件以上に一致） |
+| 6 | 送信コマンドが失敗した |
+
+### 10.7 モジュール構成の追加
+
+- `target.py`：対象の文字列の解析と、収集結果からの解決（純粋な関数。テストしやすくする）
+- `send.py`：メッセージの検証、送信コマンドの組み立てと実行、結果の表示
+- `cli.py`：`send` の振り分け
+- テスト：`test_target.py`（書き方ごとの解決、0件、複数件、`/` や `:` を含む名前、dead）、`test_send.py`（検証、組み立てられるコマンド、Enter の有無、失敗時の終了コード、表示）、`test_cli.py` に既存の一覧の呼び出し方が壊れていないことの確認を追加
+
+### 10.8 完了条件（v2）
+
+1. `python3 -m unittest discover -s tests` が全件成功（既存の28件を含む）
+2. 隔離した tmux サーバー（`TMUX_TMPDIR` を一時ディレクトリにする）で、`send tmux:<セッション> 'echo hello'` を送り、`tmux capture-pane -p` で `hello` が実行されたことを確かめる。`--no-enter` と、存在しないセッション（終了コード 4）も確かめる
+3. 実機の herdr では **`--dry-run` だけ**を使い、一覧に出ているペインが解決できることを確かめる。実在のエージェントのペインには送らない。herdr への実際の送信は、偽の Runner によるテストで確かめる（使い捨ての herdr のペインを安全に用意できる場合だけ、そこで実際に送ってもよい）
+4. README に send の使い方と出力例を追加
 
 ## 9. 設計へのフィードバック
 
