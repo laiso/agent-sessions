@@ -1,4 +1,4 @@
-# agent-sessions 設計書 v2（v1 ＋ send コマンド）
+# agent-sessions 設計書 v3（v1 ＋ send コマンド ＋ Orca ソース）
 
 作成: claude（設計・レビュー・テスト担当）／実装: codex
 
@@ -271,6 +271,97 @@ Sent to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
 2. 隔離した tmux サーバー（`TMUX_TMPDIR` を一時ディレクトリにする）で、`send tmux:<セッション> 'echo hello'` を送り、`tmux capture-pane -p` で `hello` が実行されたことを確かめる。`--no-enter` と、存在しないセッション（終了コード 4）も確かめる
 3. 実機の herdr では **`--dry-run` だけ**を使い、一覧に出ているペインが解決できることを確かめる。実在のエージェントのペインには送らない。herdr への実際の送信は、偽の Runner によるテストで確かめる（使い捨ての herdr のペインを安全に用意できる場合だけ、そこで実際に送ってもよい）
 4. README に send の使い方と出力例を追加
+
+## 11. Orca ソース（v3）
+
+### 11.1 概要
+
+Orca のボットを、一覧のもう1つのソース `orca` として表示する。
+
+- `--source` の選択肢に `orca` を追加する：`{all,herdr,tmux,orca}`。`all` は herdr → tmux → orca の順で3つとも読む。
+- `send` の対象には含めない（v3 の範囲外）。`send` の収集は、これまでどおり herdr と tmux だけ。`orca:` の接頭辞は、`send` では「対象が見つからない」（終了コード 4）として扱う。
+
+### 11.2 Orca CLI の見つけ方
+
+次の順で、最初に見つかったものを使う。
+
+1. 環境変数 `AGENT_SESSIONS_ORCA`（空でなければ、そのパス）
+2. 環境変数 `ORCA_CLI_COMMAND`（Orca が自分のボットに渡すもの）
+3. PATH 上の `orca`
+4. PATH 上の `orca.AppImage`
+
+どれも見つからなければ、Orca は 0 件（警告なし）。
+
+### 11.3 読み方
+
+外部コマンドは、これまでどおり `Runner` で実行する。ただし Orca の CLI は起動に2〜3秒かかるので、Orca の呼び出しだけタイムアウトを 15 秒にする（`Runner` に timeout を渡せるようにするか、Orca 用の既定値を持たせる。テストで差し替えられること）。
+
+1. `<orca> bot list --json`
+   - 応答：`{"ok": true, "result": {"bots": [...], "unreachable": [...]}}`
+   - 各ボットで使うキー：`id`, `name`, `agent`, `paused`, `specialty`
+   - `unreachable`（接続できない別のホスト）は無視する
+2. `<orca> worktree ps --json`（状態を知るため）
+   - 応答：`{"result": {"worktrees": [...]}}`
+   - `botHome == true` かつ `bot == <ボット名>` の行を、そのボットのホームとする。使うキー：`path`、`agents[].state`
+   - この呼び出しが失敗しても、ボットの一覧は出す（状態は §11.5 の `unknown`。ただし `paused` は分かる）
+
+### 11.4 列の対応
+
+| 列 | Orca での値 |
+|---|---|
+| SOURCE | `orca` |
+| SESSION | ボット名（`name`） |
+| PANE | `home`（ボットのホームのチャット。v3 ではボット1つにつき1行） |
+| AGENT | `agent`（`claude` / `codex` / `antigravity` など、値をそのまま） |
+| STATUS | §11.5 |
+| COMMAND | 専門分野（`specialty`）。未設定なら `-` |
+| CWD | ボットのホームの `path`（分からなければ `-`） |
+
+- JSON では、`pane_id` にボットの `id` を入れ、`focused` は `false`。
+- JSON のすべての行に `specialty` を追加する（herdr と tmux では `null`）。orca の行では、`command` にも同じ値を入れる（表との対応を保つため）。
+- 並び順：ボット名の順（Python の文字列比較）。
+- `--agents-only`：Orca のボットは常にエージェントなので、すべて含める。
+- 表の COMMAND 列の見出しは変えない（README に「Orca の行では専門分野を表示する」と書く）。
+
+### 11.5 状態（STATUS）
+
+| 条件（上から順に判定） | STATUS |
+|---|---|
+| `paused == true` | `paused` |
+| worktree ps が読めない、またはホームの行がない | `unknown` |
+| ホームの `agents[].state` に `working` がある | `working` |
+| `blocked`、`waiting`、`permission` のどれかがある | `blocked` |
+| `idle` か `done` がある | `idle` |
+| `agents` が空 | `stopped` |
+| それ以外 | `unknown` |
+
+§6 の表に `paused` と `stopped` を加える。
+
+### 11.6 0件として扱う場合（エラーにしない）
+
+次の場合は Orca の行を 0 件とし、警告も出さず、終了コードにも影響させない（tmux サーバーがないときと同じ）。
+
+- Orca CLI が見つからない、起動に失敗する、タイムアウトする
+- 終了コードが 0 以外（Orca が起動していない場合を含む）
+- 応答が JSON でない、`ok` が `true` でない、`result.bots` が配列でない
+
+`--source orca` だけを指定して 0 件の場合も、終了コードは 0（「読めた」とみなす）。
+
+### 11.7 モジュール構成の追加
+
+- `orca.py`：`collect(runner) -> list[Session]`、CLI の見つけ方（環境変数と PATH の探索を差し替えられるようにする）
+- `model.py`：`Session` に `specialty: str | None = None` を追加（JSON の項目が1つ増える）
+- `cli.py`：`--source` に `orca` を追加
+- テスト：`test_orca.py`（実機の応答から作ったフィクスチャ、paused・working・blocked・idle・stopped・unknown の判定、worktree ps の失敗、CLI がない・非ゼロ・壊れた JSON・`ok: false` で 0 件、見つけ方の優先順位）。`test_cli.py` に、`--source all` で3つのソースが順に並ぶこと、`--source orca` で 0 件でも終了コード 0 になること、`send` が orca の行を対象にしないことを追加
+
+### 11.8 完了条件（v3）
+
+1. `python3 -m unittest discover -s tests` が全件成功（既存の66件を含む）
+2. 実機で `./agent-sessions --source orca` に、いまある Orca のボット（claude、codex、gemini）が、エージェントの種類・状態・専門分野つきで出る
+3. `./agent-sessions` で herdr → tmux → orca の順に並び、`--format json` で orca の行が他と同じ形（＋ `specialty`）で出る
+4. `AGENT_SESSIONS_ORCA=/nonexistent ORCA_CLI_COMMAND= PATH=/usr/bin:/bin ./agent-sessions --source orca` が、警告なし・0件・終了コード 0 になる
+5. Orca の CLI は読むだけにする（`bot list` と `worktree ps` 以外は呼ばない）
+6. README に Orca ソースの説明を追加
 
 ## 9. 設計へのフィードバック
 

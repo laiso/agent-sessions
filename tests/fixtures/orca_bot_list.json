@@ -1,0 +1,54 @@
+{
+  "id": "a27a8cd8-47b1-499a-86d4-2d9514857df9",
+  "ok": true,
+  "result": {
+    "bots": [
+      {
+        "id": "4e99b10d-755f-4a34-9b53-b9e0575bff90",
+        "name": "claude",
+        "agent": "claude",
+        "paused": false,
+        "linked": [],
+        "specialty": "オーナーの依頼を受けて、調べもの・タスク管理・コード作業の段取りを引き受け、必要に応じて他のボット（codex、gemini）と連携するアシスタント。",
+        "chats": {
+          "count": 1,
+          "home": true,
+          "current": {
+            "home": true,
+            "title": "Home"
+          }
+        },
+        "self": true
+      },
+      {
+        "id": "b5da1230-90c0-495b-b79e-c955cbcfbad8",
+        "name": "codex",
+        "agent": "codex",
+        "paused": false,
+        "linked": [],
+        "specialty": null,
+        "chats": {
+          "count": 1,
+          "home": true
+        }
+      },
+      {
+        "id": "2e980aa2-2118-4706-b03f-97caaa1379b0",
+        "name": "gemini",
+        "agent": "antigravity",
+        "paused": false,
+        "linked": [],
+        "specialty": null,
+        "chats": {
+          "count": 1,
+          "home": true
+        }
+      }
+    ],
+    "unreachable": [
+      {
+        "name": "hirasawa-ws"
+      }
+    ]
+  }
+}
