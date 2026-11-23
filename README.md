@@ -31,13 +31,19 @@ Herdr はエージェントの内部状態を表示します。tmux の `running
 
 Orca の行はボットごとに1行です。SESSION はボット名、PANE は `home`、COMMAND は専門分野、CWD はホームのパスを表示します。ボットが一時停止中なら `paused`、ホームにエージェントがいなければ `stopped` です。ホームを取得できない場合もボットを表示します。JSON の `specialty` は専門分野で、未設定のボットと他のソースでは `null` です。
 
-Orca CLI は `AGENT_SESSIONS_ORCA`、`ORCA_CLI_COMMAND`、PATH の `orca`、`orca.AppImage` の順に探します。Orca の一覧には `bot list --json` と `worktree ps --json` を使い、各呼び出しを最大15秒待ちます。Orca のボットは一覧専用です。
+Orca CLI は `AGENT_SESSIONS_ORCA`、`ORCA_CLI_COMMAND` の順で明示指定を優先します。自動検出では PATH を探索せず、登録済み shim（`${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca`）、`~/.local/opt/orca/orca.AppImage` の順に直接調べます。リンク先を含め、自動候補には実行可能な通常ファイルで、所有者が実行ユーザーか root、グループと他人に書き込み権限がないものを使います。自動選択した shim が `Orca CLI is unavailable` と応答した場合は、AppImage でその照会を1回だけ再試行します。別の場所の CLI は環境変数で指定してください。
 
-PATH の自動検出では、Orca IDE の登録済み shim（`${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca`）または `~/.local/opt/orca/orca.AppImage` と同じ実行ファイルを選びます。これらを指すシンボリックリンクも使えます。別の場所に置いた単体 AppImage や独自ラッパーを使う場合は `AGENT_SESSIONS_ORCA=/path/to/orca.AppImage` を指定してください。
+Orca への照会は `bot list --json` と `worktree ps --json` で、各呼び出しを最大15秒待ちます。Orca のボットは一覧専用です。
 
 終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。`--source orca` 単独でボット一覧を取得できない場合も警告なしの0件・終了 `0` です。`all` では取得できなかった Orca は成功ソースに数えません。
 
 テストはリポジトリ直下で `python3 -m unittest discover -s tests` を実行してください。仕様の詳細は [設計書](docs/design.md) にあります。
+
+## 実機 E2E テスト
+
+リポジトリ直下で `./run-e2e-tests.sh` を実行すると、実際の CLI を通して8つの場面を検証します。全件を実行するには、1ペイン以上ある Herdr、tmux コマンド、既知の場所の AppImage から一覧を取得できる起動中の Orca とボットが必要です。前提が足りない場面は理由付きで skip します。`E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` はひとつでも前提が足りないと失敗します。
+
+Herdr には一覧取得と `send --dry-run` だけを使い、Orca にはボットとワークツリーの読み取りだけを行います。実送信は一時ディレクトリで起動した隔離 tmux の `cat` ペイン宛てです。テスト終了時にそのサーバーと一時ディレクトリを片付けます。
 
 ## ペインにメッセージを送る
 

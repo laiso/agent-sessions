@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from support import fixture, response
 from agent_sessions import orca
@@ -91,9 +91,9 @@ class OrcaTests(unittest.TestCase):
 
     def test_cli_discovery_order(self):
         env = {"AGENT_SESSIONS_ORCA": "/override", "ORCA_CLI_COMMAND": "/shim"}
-        self.assertEqual(orca.find_cli(env), "/override")
+        self.assertEqual(next(orca.cli_candidates(env), None), "/override")
         env["AGENT_SESSIONS_ORCA"] = ""
-        self.assertEqual(orca.find_cli(env), "/shim")
+        self.assertEqual(next(orca.cli_candidates(env), None), "/shim")
 
     def test_orca_timeout_is_local_to_orca(self):
         with patch("subprocess.run", side_effect=self.subprocess_run) as mocked:
@@ -128,6 +128,8 @@ class PathDiscoveryTests(unittest.TestCase):
         path.chmod(0o700)
 
     def test_unknown_candidates_never_reach_runner(self):
+        self.shim.unlink()
+        self.image.unlink()
         for data in (b"#!/bin/sh\nexit 0\n", b"#!/usr/bin/python3\nfrom orca import orca\n",
                      b"#!/usr/bin/python3\nfrom importlib import import_module\n", b"\x7fELF"):
             with self.subTest(data=data), patch.dict(os.environ, self.env, clear=True):
@@ -136,38 +138,74 @@ class PathDiscoveryTests(unittest.TestCase):
                 with self.assertRaises(SourceError):
                     orca.collect(lambda argv: self.fail(f"unexpected command: {argv}"))
 
-    def test_skip_unrecognized_first_orca_before_appimage(self):
+    def test_skip_unusable_shim_before_appimage(self):
         self.executable(self.first / "orca")
         (self.first / "orca.AppImage").symlink_to(self.image)
         (self.last / "orca").symlink_to(self.shim)
-        self.assertEqual(orca.find_cli(self.env), str(self.shim))
+        self.assertEqual(next(orca.cli_candidates(self.env), None), str(self.shim))
         self.shim.chmod(0o600)
-        self.assertEqual(orca.find_cli(self.env), str(self.image))
+        self.assertEqual(next(orca.cli_candidates(self.env), None), str(self.image))
 
-    def test_first_recognized_orca_in_path_order(self):
-        (self.first / "orca").symlink_to(self.image)
-        (self.last / "orca").symlink_to(self.shim)
-        self.assertEqual(orca.find_cli(self.env), str(self.image))
-        self.env["PATH"] = os.pathsep.join(map(str, (self.last, self.first)))
-        self.assertEqual(orca.find_cli(self.env), str(self.shim))
+    def test_known_installations_without_path(self):
+        self.env["PATH"] = ""
+        self.assertEqual(list(orca.cli_candidates(self.env)), [str(self.shim), str(self.image)])
 
-    def test_registered_file_reached_through_symlink_chain(self):
-        alias = self.last / "alias"
-        alias.symlink_to(self.shim)
-        (self.first / "orca").symlink_to(alias)
-        calls = []
-        with patch.dict(os.environ, self.env, clear=True):
-            rows = orca.collect(lambda argv: calls.append(argv) or response('{"ok":true,"result":{"bots":[]}}'))
-        self.assertEqual(rows, [])
-        self.assertEqual(calls, [[str(self.shim), "bot", "list", "--json"]])
+    def test_symlink_is_checked_using_target_mode(self):
         self.shim.unlink()
-        self.assertIsNone(orca.find_cli(self.env))
+        self.shim.symlink_to(self.image)
+        self.assertEqual(next(orca.cli_candidates(self.env)), str(self.shim))
+        for mode in (0o775, 0o757, 0o600):
+            with self.subTest(mode=mode):
+                self.image.chmod(mode)
+                self.assertEqual(list(orca.cli_candidates(self.env)), [])
+
+    def test_unsafe_shim_only_uses_safe_appimage(self):
+        self.shim.chmod(0o775)
+        self.assertEqual(list(orca.cli_candidates(self.env)), [str(self.image)])
+        self.image.chmod(0o777)
+        self.assertEqual(list(orca.cli_candidates(self.env)), [])
+
+    def test_candidate_ownership(self):
+        for uid, allowed in ((1001, True), (0, True), (1002, False)):
+            with self.subTest(uid=uid), patch("os.geteuid", return_value=1001), patch.object(
+                Path, "stat", return_value=Mock(st_mode=0o100755, st_uid=uid)
+            ):
+                self.assertEqual(bool(list(orca.cli_candidates(self.env))), allowed)
+
+    def test_unavailable_shim_retries_only_failed_command(self):
+        for failed in ("bot", "worktree"):
+            calls = []
+            def runner(argv):
+                calls.append(argv[:2])
+                if argv[:2] == [str(self.shim), failed]:
+                    return response(stderr="Orca CLI is unavailable; reopen Orca", code=1)
+                key = "orca_bot_list" if argv[1] == "bot" else "orca_worktree_ps"
+                return response(json.dumps(fixture(key)))
+            with self.subTest(failed=failed), patch.dict(os.environ, self.env, clear=True):
+                self.assertEqual(len(orca.collect(runner)), 3)
+                self.assertEqual(calls[0], [str(self.shim), "bot"])
+                self.assertEqual(calls[-1], [str(self.image), "worktree"])
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(calls[1], [str(self.image), "bot"] if failed == "bot"
+                                 else [str(self.shim), "worktree"])
+
+    def test_retry_limit_and_explicit_override(self):
+        for explicit, reason, count in ((False, "Orca CLI is unavailable", 2),
+                                        (True, "Orca CLI is unavailable", 1), (False, "other error", 1)):
+            env = dict(self.env)
+            if explicit:
+                env["ORCA_CLI_COMMAND"] = str(self.shim)
+            runner = Mock(return_value=response(stderr=reason, code=1))
+            with self.subTest(explicit=explicit, reason=reason), patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(SourceError):
+                    orca.collect(runner)
+                self.assertEqual(runner.call_count, count)
 
     def test_explicit_standalone_image_wins_over_path(self):
         image = self.first / "orca.AppImage"
         self.executable(image)
         (self.last / "orca").symlink_to(self.shim)
         self.env["ORCA_CLI_COMMAND"] = str(image)
-        self.assertEqual(orca.find_cli(self.env), str(image))
+        self.assertEqual(next(orca.cli_candidates(self.env), None), str(image))
         self.env["AGENT_SESSIONS_ORCA"] = "/nonexistent"
-        self.assertEqual(orca.find_cli(self.env), "/nonexistent")
+        self.assertEqual(next(orca.cli_candidates(self.env), None), "/nonexistent")

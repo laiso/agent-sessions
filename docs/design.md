@@ -486,3 +486,4 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 - v3 §11.3。ボットの名前と ID が取得できる行を表示する。ホーム行の agents が欠落・不正なら unknown、明示的な空配列なら stopped とする。worktree ps は ok を省略した result 形式も受け付け、ok が明示されて true 以外ならホーム情報を使わない。
 - （claude レビュー v3：codex の 57d1f54 に対して）§11.2：PATH 上の `orca` が GNOME のスクリーンリーダー（Arch では `orca` パッケージで /usr/bin/orca に入る、同じ名前の別のプログラム）の場合は使わない。`bot list --json` で起動すると、読み上げが始まるなどの副作用がありえるため。先頭が python の shebang で、`from orca import` などを含むスクリプトは飛ばして、次の候補（`orca.AppImage`）に進む。環境変数で明示された場合は、そのまま使う。
 - （codex 相互レビュー v3）§11.2。shebang やソースの表記による除外を、登録済み shim・実機の IDE 用 orca.desktop の Exec で確認した AppImage 配置とのファイル同一性の照合に変更した。名前別・PATH 順に全候補を調べ、リンク経由でも一致した既知配置のパスを起動する。標準外の配置は環境変数で明示する。
+- v4 §12.2。自動検出は既知の shim・AppImage を直接調べ、所有者と書込権限はリンク先の stat で確認する。自動 shim の unavailable 診断が bot list または worktree ps に返った場合、失敗した照会だけを次の AppImage で再試行し、その後も同じ AppImage を使う。明示指定の失敗やその他の診断では切り替えない。
