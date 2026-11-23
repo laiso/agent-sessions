@@ -1,6 +1,6 @@
 import json
-import os
 import unicodedata
+import uuid
 
 from .model import Session, SourceError
 from .render import cell
@@ -27,35 +27,43 @@ def tmux_literal(message: str) -> str:
     return message[:-1] + "\\;" if message.endswith(";") else message
 
 
-def tmux_command(pid: str, message: str, enter: bool) -> list[str]:
-    """One tmux invocation that pastes the text (and a newline for Enter) into one pane.
+def tmux_command(pid: str, data: str, buf: str) -> list[str]:
+    """One tmux invocation that pastes data into exactly one pane.
 
-    paste-buffer writes to the target pane only, even when synchronize-panes is on,
-    unlike send-keys which reaches every synchronized pane. Sending everything as one
-    command list leaves no window between a check and the delivery.
+    paste-buffer writes to the target pane only, even when synchronize-panes is on
+    (send-keys would reach every synchronized pane). Without -r, a newline in the
+    buffer is pasted as CR, which is the Enter key.
     """
-    buf = f"agent-sessions-{os.getpid()}"
-    argv = ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(message),
+    return ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(data),
             ";", "paste-buffer", "-d", "-b", buf, "-t", pid]
-    if enter:
-        # Without -r, paste-buffer turns the newline into CR: the Enter key.
-        argv += [";", "set-buffer", "-b", buf, "--", "\n",
-                 ";", "paste-buffer", "-d", "-b", buf, "-t", pid]
-    return argv
+
+
+def tmux_paste(pid: str, data: str, runner: Runner) -> None:
+    buf = f"agent-sessions-{uuid.uuid4().hex}"  # unique: never touches the user's buffers
+    try:
+        output(runner, tmux_command(pid, data, buf))
+    except SourceError as exc:
+        # set-buffer may have succeeded and paste-buffer failed: remove our buffer.
+        try:
+            output(runner, ["tmux", "delete-buffer", "-b", buf],
+                   empty_errors=("no buffer", "unknown buffer"))
+        except SourceError as cleanup:
+            raise SourceError(f"{exc}; temporary buffer {buf} may remain ({cleanup})") from exc
+        raise
 
 
 def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
     pid = target.pane_id
     if target.source == "tmux":
-        argv = tmux_command(pid, message, enter)
         try:
-            output(runner, argv)
+            tmux_paste(pid, message, runner)
         except SourceError as exc:
-            try:  # drop a buffer left behind by a failed paste
-                runner(["tmux", "delete-buffer", "-b", argv[3]])
-            except Exception:
-                pass
-            raise SourceError(f"tmux delivery failed (text may be partly sent): {exc}") from exc
+            raise SourceError(f"nothing sent: {exc}") from exc
+        if enter:
+            try:
+                tmux_paste(pid, "\n", runner)
+            except SourceError as exc:
+                raise SourceError(f"text sent, Enter failed: {exc}") from exc
         return
 
     text_cmd = ["herdr", "pane", "send-text", pid]

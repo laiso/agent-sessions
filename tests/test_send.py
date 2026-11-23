@@ -65,9 +65,8 @@ class SendTests(unittest.TestCase):
     def test_tmux_detached_no_enter_and_json(self):
         text = "Enter; echo $HOME"
         self.assertEqual(self.invoke("--no-enter", "--format", "json", "tmux:dev", text), 0)
-        self.assertEqual(self.calls, [tmux_command("%8", text, False)])
-        self.assertEqual(self.calls[0][:6], ["tmux", "set-buffer", "-b", self.calls[0][3], "--", text])
-        self.assertNotIn("send-keys", self.calls[0])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0], tmux_command("%8", text, self.calls[0][3]))
         target = dict(source="tmux", session="dev", pane="0.3 work", pane_id="%8", agent=None,
                       status="shell", command="bash", cwd="/tmp", focused=False)
         self.assertEqual(json.loads(self.out.getvalue()), dict(sent=True, dry_run=False, enter=False,
@@ -75,11 +74,8 @@ class SendTests(unittest.TestCase):
 
     def test_tmux_enter(self):
         self.assertEqual(self.invoke("tmux:%8", "--", "-abc"), 0)
-        self.assertEqual(self.calls, [tmux_command("%8", "-abc", True)])
-        argv = self.calls[0]
-        self.assertEqual(argv.count("paste-buffer"), 2)
-        self.assertIn("\n", argv)
-        self.assertNotIn("send-keys", argv)
+        self.assertEqual([c[5] for c in self.calls], ["-abc", "\n"])
+        self.assertTrue(all("send-keys" not in c for c in self.calls))
         self.assertIn("dev:0.3 (%8) [shell]", self.out.getvalue())
 
     def test_dry_run(self):
@@ -121,20 +117,20 @@ class TmuxSafetyTests(unittest.TestCase):
         from agent_sessions.model import TmuxSession
         return TmuxSession("tmux", "dev", "1.0", "%3", None, "shell", "bash", "/tmp", False, True)
 
-    def test_single_invocation_without_send_keys(self):
-        """paste-buffer ignores synchronize-panes; one command list leaves no race window."""
+    def test_paste_only_unique_buffers(self):
+        """paste-buffer ignores synchronize-panes; buffer names never collide with the user's."""
         from agent_sessions.send import transmit
         calls = []
         transmit(self.target(), "rm -rf x", True, lambda argv: calls.append(argv) or response())
-        self.assertEqual(len(calls), 1)
-        argv = calls[0]
-        self.assertNotIn("send-keys", argv)
-        self.assertEqual([argv[i + 1] for i, a in enumerate(argv) if a == ";"],
-                         ["paste-buffer", "set-buffer", "paste-buffer"])
-        pastes = [argv[i:i + 6] for i, a in enumerate(argv) if a == "paste-buffer"]
-        self.assertEqual(pastes, [["paste-buffer", "-d", "-b", argv[3], "-t", "%3"]] * 2)
+        self.assertEqual(len(calls), 2)
+        for argv, data in zip(calls, ["rm -rf x", "\n"]):
+            self.assertNotIn("send-keys", argv)
+            self.assertEqual(argv[1:6], ["set-buffer", "-b", argv[3], "--", data])
+            self.assertEqual(argv[6:], [";", "paste-buffer", "-d", "-b", argv[3], "-t", "%3"])
+        self.assertRegex(calls[0][3], r"^agent-sessions-[0-9a-f]{32}$")
+        self.assertNotEqual(calls[0][3], calls[1][3])
 
-    def test_failure_cleans_buffer(self):
+    def test_text_failure_reports_nothing_sent_and_cleans(self):
         from agent_sessions.model import SourceError
         from agent_sessions.send import transmit
         calls = []
@@ -142,9 +138,44 @@ class TmuxSafetyTests(unittest.TestCase):
         def runner(argv):
             calls.append(argv)
             return response(stderr="can't find pane: %3", code=1) if argv[1] == "set-buffer" else response()
-        with self.assertRaisesRegex(SourceError, "tmux delivery failed"):
+        with self.assertRaisesRegex(SourceError, "^nothing sent"):
             transmit(self.target(), "hi", True, runner)
-        self.assertEqual(calls[-1][:3], ["tmux", "delete-buffer", "-b"])
+        self.assertEqual(calls[-1], ["tmux", "delete-buffer", "-b", calls[0][3]])
+
+    def test_enter_failure_reports_text_sent(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            bad = argv[1] == "set-buffer" and argv[5] == "\n"
+            return response(stderr="can't find pane", code=1) if bad else response()
+        with self.assertRaisesRegex(SourceError, "^text sent, Enter failed"):
+            transmit(self.target(), "hi", True, runner)
+
+    def test_cleanup_failure_is_reported(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+
+        def runner(argv):
+            if argv[1] == "set-buffer":
+                return response(stderr="paste failed", code=1)
+            return response(stderr="server exited", code=1)
+        with self.assertRaisesRegex(SourceError, "temporary buffer agent-sessions-[0-9a-f]+ may remain"):
+            transmit(self.target(), "hi", False, runner)
+
+    def test_cleanup_of_missing_buffer_is_quiet(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+
+        def runner(argv):
+            if argv[1] == "set-buffer":
+                return response(stderr="paste failed", code=1)
+            return response(stderr="no buffer agent-sessions-x", code=1)
+        with self.assertRaises(SourceError) as ctx:
+            transmit(self.target(), "hi", False, runner)
+        self.assertNotIn("may remain", str(ctx.exception))
 
     def test_trailing_semicolon_escaped(self):
         from agent_sessions.send import tmux_literal
@@ -152,4 +183,4 @@ class TmuxSafetyTests(unittest.TestCase):
         self.assertEqual(tmux_literal(";"), "\\;")
         self.assertEqual(tmux_literal("b\\;"), "b\\\\;")
         self.assertEqual(tmux_literal("a ; b"), "a ; b")
-        self.assertEqual(tmux_command("%3", "x;", False)[5], "x\\;")
+        self.assertEqual(tmux_command("%3", "x;", "b")[5], "x\\;")
