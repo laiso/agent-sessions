@@ -14,12 +14,70 @@ AGENTS = {"claude", "codex", "gemini", "agy", "opencode", "aider", "cursor-agent
           "copilot", "kimi", "pi"}
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "nu"}
 INTERPRETERS = {"node", "nodejs", "bun", "deno", "npx", "bunx", "python", "python3", "uv", "uvx"}
+# Options that consume the next argument, per interpreter family.
+OPTION_ARGS = {
+    "node": {"-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file",
+             "--title", "--input-type", "-C", "--conditions"},
+    "python": {"-W", "-X", "--check-hash-based-pycs"},
+    "npx": {"-p", "--package", "-c", "--call", "--cache", "--registry"},
+    "uv": {"--with", "--python", "-p", "--from", "--directory", "--project"},
+    "deno": {"--config", "-c", "--import-map", "--location"},
+    "bun": {"--preload", "-r", "--cwd", "--config", "-c"},
+}
+# Options after which no script follows (inline code).
+NO_SCRIPT = {"-e", "--eval", "-p", "--print", "-c"}
+SUBCOMMANDS = {"run", "exec", "x", "tool"}
 
 
-def agent_name(names: list[str]) -> str | None:
+def family(name: str) -> str:
+    if name.startswith("python"):
+        return "python"
+    if name in ("nodejs",):
+        return "node"
+    if name in ("bunx",):
+        return "bun"
+    if name in ("uvx",):
+        return "uv"
+    return name
+
+
+def script_of(argv: list[str]) -> str | None:
+    """Basename of the script or module an interpreter runs, or None."""
+    fam = family(Path(argv[0]).name)
+    takes_arg = OPTION_ARGS.get(fam, set())
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if fam == "python" and arg == "-m" and i + 1 < len(argv):
+            return argv[i + 1].split(".")[0]
+        if fam == "python" and arg == "-c":
+            return None
+        if fam in ("node", "bun", "deno") and arg in NO_SCRIPT:
+            return None
+        if arg == "--":
+            return Path(argv[i + 1]).name if i + 1 < len(argv) else None
+        if arg.startswith("-"):
+            i += 2 if (arg in takes_arg and "=" not in arg) else 1
+            continue
+        if fam in ("uv", "deno", "bun") and arg in SUBCOMMANDS:
+            i += 1
+            continue
+        return Path(arg).name
+    return None
+
+
+def agent_name(argv: list[str]) -> str | None:
     """Agent from the executable, or from the script an interpreter runs (node .../claude)."""
-    if not names:
+    if not argv:
         return None
+    exe = Path(argv[0]).name
+    if exe in AGENTS:
+        return exe
+    if exe in INTERPRETERS or exe.startswith("python3."):
+        script = script_of(argv)
+        if script in AGENTS:
+            return script
+    return None
     if names[0] in AGENTS:
         return names[0]
     if names[0] in INTERPRETERS or names[0].startswith("python3."):
@@ -54,7 +112,8 @@ def default_title(title: str, hosts: set[str]) -> bool:
     """True for titles tmux or the shell set automatically (hostname, user@host:cwd)."""
     if title in hosts:
         return True
-    return any(re.match(r"[^@\s]+@" + re.escape(host) + r"(?=[:\s]|$)", title) for host in hosts)
+    # Known shell formats: "user@host", "user@host:<cwd>", "user@host <cwd>" (cwd starts with ~ or /).
+    return any(re.fullmatch(r"[^@\s]+@" + re.escape(host) + r"(?::.*|\s+[~/]\S*)?", title) for host in hosts)
 
 
 def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child) -> list[Session]:
@@ -74,7 +133,7 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
             raise SourceError("invalid tmux list-panes record") from exc
         argv = proc_reader(shell_pid) or ([current] if current else [])
         names = [Path(arg).name for arg in argv]
-        agent = agent_name(names)
+        agent = agent_name(argv)
         status = "running"
         if dead == "1":
             status = "dead"

@@ -76,3 +76,30 @@ class TmuxTests(unittest.TestCase):
         self.assertEqual(row.agent, "codex")
         row, = self.read(record(), argv=["/usr/bin/gemini", "--yolo"])
         self.assertEqual(row.agent, "gemini")
+
+    def test_interpreter_options_that_take_arguments(self):
+        cases = [
+            (["node", "--require", "/tmp/x/claude", "/tmp/x/app.js"], None),
+            (["node", "--require", "/tmp/x/hook.js", "/tmp/x/claude"], "claude"),
+            (["node", "--require=/tmp/x/hook.js", "/tmp/x/codex", "--yolo"], "codex"),
+            (["node", "-e", "require('claude')"], None),
+            (["python3", "-m", "aider", "--model", "x"], "aider"),
+            (["python3", "-W", "ignore", "/usr/bin/aider"], "aider"),
+            (["python3", "-c", "import claude"], None),
+            (["npx", "-p", "claude", "other-tool"], None),
+            (["uvx", "--from", "x", "aider"], "aider"),
+            (["uv", "run", "aider"], "aider"),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                row, = self.read(record(), argv=argv)
+                self.assertEqual(row.agent, expected)
+
+    def test_explicit_title_with_host_prefix_kept(self):
+        host = socket.gethostname()
+        for title in (f"user@{host} deploy review", f"user@{host} release"):
+            row, = self.read(record(title=title))
+            self.assertEqual(row.pane, "1.0 " + title)
+        for title in (f"user@{host} ~/src", f"user@{host} /tmp"):
+            row, = self.read(record(title=title))
+            self.assertEqual(row.pane, "1.0")

@@ -51,3 +51,14 @@ class ErrorMessageTests(unittest.TestCase):
         self.assertEqual(error_message(raw), "no herdr server is running")
         self.assertEqual(error_message("plain failure\n"), "plain failure")
         self.assertEqual(error_message('{"error": 1}'), '{"error": 1}')
+
+    def test_structured_message_preferred_over_plain_stderr(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.runner import output
+        raw = '{"error":{"message":"no herdr server is running"}}'
+        with self.assertRaises(SourceError) as ctx:
+            output(lambda argv: response(stdout=raw, stderr="config warning", code=1), ["herdr"])
+        self.assertEqual(str(ctx.exception), "no herdr server is running")
+        with self.assertRaises(SourceError) as ctx:
+            output(lambda argv: response(stdout="", stderr="plain", code=1), ["x"])
+        self.assertEqual(str(ctx.exception), "plain")

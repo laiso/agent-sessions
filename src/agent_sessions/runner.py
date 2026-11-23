@@ -19,18 +19,21 @@ def output(runner: Runner, argv: list[str], empty_errors: tuple[str, ...] = ()) 
     if result.returncode:
         if any(reason in result.stderr for reason in empty_errors):
             return ""
-        raise SourceError(error_message(result.stderr) or error_message(result.stdout)
+        raise SourceError(json_message(result.stderr) or json_message(result.stdout)
+                          or (result.stderr or "").strip() or (result.stdout or "").strip()
                           or f"exit code {result.returncode}")
     return result.stdout
 
 
-def error_message(text: str) -> str:
-    """Return a readable message; JSON errors like Herdr's use their error.message."""
-    text = (text or "").strip()
+def json_message(text: str | None) -> str | None:
+    """error.message from a JSON error like Herdr's, or None."""
     try:
-        message = json.loads(text)["error"]["message"]
-        if isinstance(message, str) and message:
-            return message
+        message = json.loads((text or "").strip())["error"]["message"]
     except (ValueError, KeyError, TypeError):
-        pass
-    return text
+        return None
+    return message if isinstance(message, str) and message else None
+
+
+def error_message(text: str) -> str:
+    """Readable message: a JSON error's message, otherwise the text itself."""
+    return json_message(text) or (text or "").strip()
