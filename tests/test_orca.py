@@ -105,3 +105,25 @@ class OrcaTests(unittest.TestCase):
 
     def subprocess_run(self, argv, **kwargs):
         return self.runner(argv) if argv[0] == self.cli else response()
+
+
+class ScreenReaderTests(unittest.TestCase):
+    """GNOME's screen reader is also `orca` on PATH; never run it."""
+
+    def test_screen_reader_on_path_is_skipped(self):
+        import tempfile, os
+        from agent_sessions.orca import find_cli, screen_reader
+        with tempfile.TemporaryDirectory() as d:
+            reader = os.path.join(d, "orca")
+            with open(reader, "w") as f:
+                f.write("#!/usr/bin/python3\n# Orca screen reader\nfrom orca import orca\norca.main()\n")
+            shim = os.path.join(d, "shim")
+            with open(shim, "w") as f:
+                f.write("#!/usr/bin/env bash\nexec /tmp/x/resources/bin/orca-ide \"$@\"\n")
+            self.assertTrue(screen_reader(reader))
+            self.assertFalse(screen_reader(shim))
+            self.assertFalse(screen_reader(os.path.join(d, "missing")))
+            paths = {"orca": reader, "orca.AppImage": "/opt/orca.AppImage"}
+            self.assertEqual(find_cli({}, paths.get), "/opt/orca.AppImage")
+            self.assertIsNone(find_cli({}, {"orca": reader}.get))
+            self.assertEqual(find_cli({"ORCA_CLI_COMMAND": shim}, paths.get), shim)

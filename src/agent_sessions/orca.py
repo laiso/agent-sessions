@@ -8,9 +8,31 @@ from .model import Session, SourceError
 from .runner import Runner, output, run
 
 
-def find_cli(env: Mapping[str, str], which: Callable[[str], str | None]) -> str | None:
-    return (env.get("AGENT_SESSIONS_ORCA") or env.get("ORCA_CLI_COMMAND")
-            or which("orca") or which("orca.AppImage"))
+def screen_reader(path: str) -> bool:
+    """True for GNOME's Orca screen reader, which is also installed as `orca`.
+
+    Running it with `bot list --json` could start speech output, so a PATH hit
+    that is that Python program is skipped. Unreadable files are not rejected.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(65536)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and b"python" in head.split(b"\n", 1)[0] and (
+        b"from orca import" in head or b"import orca" in head or b"screen reader" in head.lower())
+
+
+def find_cli(env: Mapping[str, str], which: Callable[[str], str | None],
+             is_screen_reader: Callable[[str], bool] = screen_reader) -> str | None:
+    explicit = env.get("AGENT_SESSIONS_ORCA") or env.get("ORCA_CLI_COMMAND")
+    if explicit:
+        return explicit
+    for name in ("orca", "orca.AppImage"):
+        path = which(name)
+        if path and not is_screen_reader(path):
+            return path
+    return None
 
 
 def records(runner: Runner, argv: list[str], key: str) -> list[dict]:
