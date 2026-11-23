@@ -231,6 +231,36 @@ class LiveTests(unittest.TestCase):
                 self.fail("cat did not receive and echo the submitted line")
             time.sleep(0.02)
 
+    def test_E10_macos_ps_path_on_real_process_table(self):
+        """Run the macOS (ps-based) tmux process reading against a real ps and a real tmux.
+
+        On macOS this is the native path. On Linux, procps accepts the same ps options,
+        so the macOS parsing is exercised against a live process table instead of mocks.
+        """
+        if not shutil.which("ps"):
+            self.unavailable("ps is not installed")
+        self.start_tmux()
+        sleeper = self.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", SESSION,
+                            "sh", "-c", "sleep 304; :")
+        log = self.tmp / "darwin-launches.jsonl"
+        env = dict(self.env, PYTHONPATH=str(ROOT / "tests_e2e/darwin"),
+                   AGENT_SESSIONS_E2E_FAKE_DARWIN="1", AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
+        deadline = time.monotonic() + 2
+        while True:
+            rows = json.loads(self.cli("--source", "tmux", "--format", "json", env=env))
+            command = next(r["command"] for r in rows if r["pane_id"] == sleeper)
+            if command == "sleep 304":
+                break
+            if time.monotonic() >= deadline:
+                self.fail(f"ps path: expected 'sleep 304' in {sleeper}, got {command!r}")
+            time.sleep(0.02)
+        launches = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertIn(["ps", "-A", "-ww", "-o", "pid=,ppid=,args="], launches,
+                      "the macOS ps path did not run")
+        native = json.loads(self.cli("--source", "tmux", "--format", "json"))
+        self.assertEqual([(r["pane_id"], r["command"], r["agent"], r["status"]) for r in rows],
+                         [(r["pane_id"], r["command"], r["agent"], r["status"]) for r in native])
+
     @unittest.skipUnless(platform.system() == "Darwin", "not macOS")
     def test_E9_macos_orca_bundle(self):
         binary = self.orca_binary()

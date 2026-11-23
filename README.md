@@ -54,18 +54,18 @@ Preview the target and message with `--dry-run`. By default, `send` follows the 
 
 ```sh
 ./agent-sessions send --dry-run herdr:my-app/1 'How is the build going?'
-./agent-sessions send herdr:wN:pH 'How is the build going?'
+./agent-sessions send herdr:w1:p1 'How is the build going?'
 ./agent-sessions send tmux:demo echo hello
 ./agent-sessions send --no-enter tmux:demo:0.0 -- '--help'
 ./agent-sessions send --dry-run --format json tmux:%12 'What is next?'
 ```
 
 ```text
-Would send to herdr my-app/1 (wN:pH) [agy, idle]
+Would send to herdr my-app/1 (w1:p1) [agy, idle]
 > How is the build going? ⏎
 ```
 
-Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `wN:pH` and `%12` require it. Ambiguous matches print the candidates to stderr. Orca bots are list-only.
+Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. Orca bots are list-only.
 
 Message arguments are joined with one space. Put `--` before a message starting with a hyphen. Messages must contain non-whitespace text and may contain up to 4096 characters. Tabs, newlines and other control characters are rejected.
 
@@ -92,4 +92,4 @@ The live suite requires Herdr with at least one pane, tmux, and a running Orca i
 
 Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
 
-macOS discovery and process collection have been checked with platform-substituted unit tests only. Live macOS validation is pending: the designated Mac mini lacked Orca and SSH public-key access was unavailable. The [design specification](docs/design.md) is in Japanese.
+macOS Orca discovery has been checked with platform-substituted unit tests only, and live validation on a Mac is still pending. The macOS `ps` parsing also runs in the live suite against the real process table, because Linux procps accepts the same `ps` options. The [design specification](docs/design.md) is in Japanese.
