@@ -1,4 +1,5 @@
 import json
+import os
 import unicodedata
 
 from .model import Session, SourceError
@@ -26,33 +27,51 @@ def tmux_literal(message: str) -> str:
     return message[:-1] + "\\;" if message.endswith(";") else message
 
 
+def tmux_command(pid: str, message: str, enter: bool) -> list[str]:
+    """One tmux invocation that pastes the text (and a newline for Enter) into one pane.
+
+    paste-buffer writes to the target pane only, even when synchronize-panes is on,
+    unlike send-keys which reaches every synchronized pane. Sending everything as one
+    command list leaves no window between a check and the delivery.
+    """
+    buf = f"agent-sessions-{os.getpid()}"
+    argv = ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(message),
+            ";", "paste-buffer", "-d", "-b", buf, "-t", pid]
+    if enter:
+        # Without -r, paste-buffer turns the newline into CR: the Enter key.
+        argv += [";", "set-buffer", "-b", buf, "--", "\n",
+                 ";", "paste-buffer", "-d", "-b", buf, "-t", pid]
+    return argv
+
+
 def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
     pid = target.pane_id
-    if target.source == "herdr":
-        text_cmd = ["herdr", "pane", "send-text", pid]
-        enter_cmd = ["herdr", "pane", "send-keys", pid, "enter"]
-        # Herdr removes its global session/remote switches even after the pane ID.
-        # Its send-text handler would send an inserted "--" literally.
-        if message.partition("=")[0] in ("--session", "--remote", "--remote-keybindings"):
-            output(runner, [*text_cmd, "-"])
-            try:
-                output(runner, [*text_cmd, message[1:]])
-            except SourceError as exc:
-                raise SourceError(f"leading '-' sent, remaining text failed: {exc}") from exc
-        else:
-            output(runner, [*text_cmd, message])
+    if target.source == "tmux":
+        argv = tmux_command(pid, message, enter)
+        try:
+            output(runner, argv)
+        except SourceError as exc:
+            try:  # drop a buffer left behind by a failed paste
+                runner(["tmux", "delete-buffer", "-b", argv[3]])
+            except Exception:
+                pass
+            raise SourceError(f"tmux delivery failed (text may be partly sent): {exc}") from exc
+        return
+
+    text_cmd = ["herdr", "pane", "send-text", pid]
+    # Herdr removes its global session/remote switches even after the pane ID.
+    # Its send-text handler would send an inserted "--" literally.
+    if message.partition("=")[0] in ("--session", "--remote", "--remote-keybindings"):
+        output(runner, [*text_cmd, "-"])
+        try:
+            output(runner, [*text_cmd, message[1:]])
+        except SourceError as exc:
+            raise SourceError(f"leading '-' sent, remaining text failed: {exc}") from exc
     else:
-        # With synchronize-panes on, send-keys reaches every pane in the window.
-        # Refuse instead of changing the user's setting.
-        synced = output(runner, ["tmux", "display-message", "-p", "-t", pid, "#{pane_synchronized}"])
-        if synced.strip() == "1":
-            raise SourceError("synchronize-panes is on for this window; "
-                              "the message would reach every pane, so nothing was sent")
-        output(runner, ["tmux", "send-keys", "-t", pid, "-l", "--", tmux_literal(message)])
-        enter_cmd = ["tmux", "send-keys", "-t", pid, "Enter"]
+        output(runner, [*text_cmd, message])
     if enter:
         try:
-            output(runner, enter_cmd)
+            output(runner, ["herdr", "pane", "send-keys", pid, "enter"])
         except SourceError as exc:
             raise SourceError(f"text sent, Enter failed: {exc}") from exc
 

@@ -5,7 +5,7 @@ import unittest
 
 from support import fixture, response
 from agent_sessions.cli import main
-from agent_sessions.send import message_text
+from agent_sessions.send import message_text, tmux_command
 
 
 class SendTests(unittest.TestCase):
@@ -65,7 +65,9 @@ class SendTests(unittest.TestCase):
     def test_tmux_detached_no_enter_and_json(self):
         text = "Enter; echo $HOME"
         self.assertEqual(self.invoke("--no-enter", "--format", "json", "tmux:dev", text), 0)
-        self.assertEqual(self.calls, [["tmux", "display-message", "-p", "-t", "%8", "#{pane_synchronized}"], ["tmux", "send-keys", "-t", "%8", "-l", "--", text]])
+        self.assertEqual(self.calls, [tmux_command("%8", text, False)])
+        self.assertEqual(self.calls[0][:6], ["tmux", "set-buffer", "-b", self.calls[0][3], "--", text])
+        self.assertNotIn("send-keys", self.calls[0])
         target = dict(source="tmux", session="dev", pane="0.3 work", pane_id="%8", agent=None,
                       status="shell", command="bash", cwd="/tmp", focused=False)
         self.assertEqual(json.loads(self.out.getvalue()), dict(sent=True, dry_run=False, enter=False,
@@ -73,8 +75,11 @@ class SendTests(unittest.TestCase):
 
     def test_tmux_enter(self):
         self.assertEqual(self.invoke("tmux:%8", "--", "-abc"), 0)
-        self.assertEqual(self.calls, [["tmux", "display-message", "-p", "-t", "%8", "#{pane_synchronized}"], ["tmux", "send-keys", "-t", "%8", "-l", "--", "-abc"],
-                                      ["tmux", "send-keys", "-t", "%8", "Enter"]])
+        self.assertEqual(self.calls, [tmux_command("%8", "-abc", True)])
+        argv = self.calls[0]
+        self.assertEqual(argv.count("paste-buffer"), 2)
+        self.assertIn("\n", argv)
+        self.assertNotIn("send-keys", argv)
         self.assertIn("dev:0.3 (%8) [shell]", self.out.getvalue())
 
     def test_dry_run(self):
@@ -116,28 +121,35 @@ class TmuxSafetyTests(unittest.TestCase):
         from agent_sessions.model import TmuxSession
         return TmuxSession("tmux", "dev", "1.0", "%3", None, "shell", "bash", "/tmp", False, True)
 
-    def test_refuses_when_panes_synchronized(self):
+    def test_single_invocation_without_send_keys(self):
+        """paste-buffer ignores synchronize-panes; one command list leaves no race window."""
+        from agent_sessions.send import transmit
+        calls = []
+        transmit(self.target(), "rm -rf x", True, lambda argv: calls.append(argv) or response())
+        self.assertEqual(len(calls), 1)
+        argv = calls[0]
+        self.assertNotIn("send-keys", argv)
+        self.assertEqual([argv[i + 1] for i, a in enumerate(argv) if a == ";"],
+                         ["paste-buffer", "set-buffer", "paste-buffer"])
+        pastes = [argv[i:i + 6] for i, a in enumerate(argv) if a == "paste-buffer"]
+        self.assertEqual(pastes, [["paste-buffer", "-d", "-b", argv[3], "-t", "%3"]] * 2)
+
+    def test_failure_cleans_buffer(self):
         from agent_sessions.model import SourceError
         from agent_sessions.send import transmit
         calls = []
 
         def runner(argv):
             calls.append(argv)
-            return response("1\n") if argv[1] == "display-message" else response()
-        with self.assertRaisesRegex(SourceError, "synchronize-panes"):
-            transmit(self.target(), "rm -rf x", True, runner)
-        self.assertEqual([c[1] for c in calls], ["display-message"])
+            return response(stderr="can't find pane: %3", code=1) if argv[1] == "set-buffer" else response()
+        with self.assertRaisesRegex(SourceError, "tmux delivery failed"):
+            transmit(self.target(), "hi", True, runner)
+        self.assertEqual(calls[-1][:3], ["tmux", "delete-buffer", "-b"])
 
     def test_trailing_semicolon_escaped(self):
-        from agent_sessions.send import tmux_literal, transmit
+        from agent_sessions.send import tmux_literal
         self.assertEqual(tmux_literal("a;"), "a\\;")
         self.assertEqual(tmux_literal(";"), "\\;")
         self.assertEqual(tmux_literal("b\\;"), "b\\\\;")
         self.assertEqual(tmux_literal("a ; b"), "a ; b")
-        calls = []
-
-        def runner(argv):
-            calls.append(argv)
-            return response("0\n") if argv[1] == "display-message" else response()
-        transmit(self.target(), "x;", False, runner)
-        self.assertEqual(calls[-1][-1], "x\\;")
+        self.assertEqual(tmux_command("%3", "x;", False)[5], "x\\;")

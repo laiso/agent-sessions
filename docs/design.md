@@ -228,9 +228,9 @@ agent-sessions send [--no-enter] [--dry-run] [--format {text,json}] <対象> [--
 - Herdr：
   1. `herdr pane send-text <pane_id> <メッセージ>`（メッセージが `-` で始まる場合でも誤解釈されない形にする。実装時に herdr の引数解析で確かめ、必要なら `--` を挟む）
   2. Enter を送る場合：`herdr pane send-keys <pane_id> enter`（キー名は実装時に herdr で確かめる）
-- tmux：
-  1. `tmux send-keys -t <pane_id> -l -- <メッセージ>`（`-l` で文字どおり送る。キー名として解釈させない）
-  2. Enter を送る場合：`tmux send-keys -t <pane_id> Enter`
+- tmux：1回の tmux 呼び出しで、次のコマンド列を実行する（v2 レビューで変更。変更履歴を参照）
+  `set-buffer -b <一時名> -- <メッセージ> ; paste-buffer -d -b <一時名> -t <pane_id>`
+  Enter を送る場合は、続けて `; set-buffer -b <一時名> -- "\n" ; paste-buffer -d -b <一時名> -t <pane_id>`（改行は貼り付け時に CR、つまり Enter になる）
 - 対象は必ず ID（herdr の pane_id、tmux の `%n`）で指定する。名前で指定すると、解決から送信までの間に別のペインに当たるおそれがあるため。
 - 送信コマンドが失敗したら終了コード 6。stderr に `agent-sessions: send: <理由>`（§3 と同じ JSON の error.message の扱い）。テキストは送れて Enter だけ失敗した場合も 6 とし、そのことを理由に書く。
 
@@ -300,3 +300,4 @@ Sent to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
 - （codex 相互レビュー v2 の 1 回目への対応）§10.4 tmux：P1。ウィンドウで synchronize-panes が on だと、send-keys がウィンドウ内のすべてのペインに届く。送る前に `#{pane_synchronized}` を調べ、1 なら何も送らずに終了コード 6 で終える（ユーザーの設定は変えない）。
 - （codex 相互レビュー v2 の 1 回目への対応）§10.4 tmux：末尾が `;` の引数は、tmux のコマンド区切りとして解釈される。末尾の `;` を `\;` に置き換えて、文字どおり届くようにする（`a;`、`b\;`、`;`、`c;;` を隔離した tmux で確認）。
 - （codex 相互レビュー v2 の 1 回目への対応）§10.2：見つからないときの候補からは、指定した対象そのものと dead のペインを除く。選べる候補がなければ、見出しも出さない。
+- （codex 相互レビュー v2 の 2 回目への対応）§10.4 tmux：P1 2件（同期を確かめてから送るまでの間に設定が変わる競合と、同期の状態が分からないときにも送ってしまう件）を、方式の変更でまとめて解消した。send-keys をやめ、`set-buffer` と `paste-buffer` を1回の tmux 呼び出しのコマンド列で送る。paste-buffer は synchronize-panes が on でも指定したペインにだけ届き（隔離した tmux 3.8 で、cat を2ペインで動かし同期を on にして確認）、Enter も改行の貼り付け（CR になる）で送る。そのため同期の設定に左右されず、確認の手順もいらない。前回入れた `#{pane_synchronized}` の確認はやめた。失敗したときは一時バッファを消す。
