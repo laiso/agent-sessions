@@ -19,47 +19,59 @@ OPTION_ARGS = {
     "node": {"-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file",
              "--title", "--input-type", "-C", "--conditions"},
     "python": {"-W", "-X", "--check-hash-based-pycs"},
-    "npx": {"-p", "--package", "-c", "--call", "--cache", "--registry"},
-    "uv": {"--with", "--python", "-p", "--from", "--directory", "--project"},
-    "deno": {"--config", "-c", "--import-map", "--location"},
-    "bun": {"--preload", "-r", "--cwd", "--config", "-c"},
+    "npx": {"-p", "--package", "-c", "--call", "--cache", "--registry", "-w", "--workspace",
+            "--userconfig", "--prefix"},
+    "uv": {"--with", "--with-requirements", "--with-editable", "--python", "-p", "--from",
+           "--directory", "--project", "--env-file", "--index", "--extra", "--group"},
+    "deno": {"--config", "-c", "--import-map", "--location", "--env-file"},
+    "bun": {"--preload", "-r", "--cwd", "--config", "-c", "--env-file"},
 }
-# Options after which no script follows (inline code).
-NO_SCRIPT = {"-e", "--eval", "-p", "--print", "-c"}
-SUBCOMMANDS = {"run", "exec", "x", "tool"}
+# Options whose value is inline code: no script follows.
+INLINE_CODE = {"node": {"-e", "--eval", "-p", "--print"}, "python": {"-c"},
+               "bun": {"-e", "--eval", "-p", "--print"}, "deno": set()}
+# Launch subcommands consumed once, before the command name (uv run X, deno run X, bun run X).
+SUBCOMMANDS = {"uv": {"run", "tool"}, "deno": {"run"}, "bun": {"run", "x"}}
 
 
 def family(name: str) -> str:
     if name.startswith("python"):
         return "python"
-    if name in ("nodejs",):
-        return "node"
-    if name in ("bunx",):
-        return "bun"
-    if name in ("uvx",):
-        return "uv"
-    return name
+    return {"nodejs": "node", "bunx": "bun", "uvx": "uv"}.get(name, name)
 
 
 def script_of(argv: list[str]) -> str | None:
-    """Basename of the script or module an interpreter runs, or None."""
+    """Basename of the script or module an interpreter runs, or None.
+
+    Best effort: covers common option forms (separate value, --opt=value, and
+    Python's joined short options -mmod / -ccode); unknown options are assumed
+    to take no value.
+    """
     fam = family(Path(argv[0]).name)
     takes_arg = OPTION_ARGS.get(fam, set())
+    inline = INLINE_CODE.get(fam, set())
+    subcommands = set(SUBCOMMANDS.get(fam, set()))
     i = 1
     while i < len(argv):
         arg = argv[i]
-        if fam == "python" and arg == "-m" and i + 1 < len(argv):
-            return argv[i + 1].split(".")[0]
-        if fam == "python" and arg == "-c":
-            return None
-        if fam in ("node", "bun", "deno") and arg in NO_SCRIPT:
-            return None
         if arg == "--":
             return Path(argv[i + 1]).name if i + 1 < len(argv) else None
         if arg.startswith("-"):
-            i += 2 if (arg in takes_arg and "=" not in arg) else 1
+            name, has_value = arg.split("=", 1)[0], "=" in arg
+            if fam == "python" and not arg.startswith("--"):
+                flag, joined = arg[:2], arg[2:]
+                if flag == "-m":
+                    module = joined or (argv[i + 1] if i + 1 < len(argv) else "")
+                    return module.split(".")[0] or None
+                if flag == "-c":
+                    return None
+                i += 2 if (flag in takes_arg and not joined) else 1
+                continue
+            if name in inline:
+                return None
+            i += 2 if (name in takes_arg and not has_value) else 1
             continue
-        if fam in ("uv", "deno", "bun") and arg in SUBCOMMANDS:
+        if arg in subcommands:
+            subcommands = set()  # only one launch subcommand
             i += 1
             continue
         return Path(arg).name
@@ -75,13 +87,6 @@ def agent_name(argv: list[str]) -> str | None:
         return exe
     if exe in INTERPRETERS or exe.startswith("python3."):
         script = script_of(argv)
-        if script in AGENTS:
-            return script
-    return None
-    if names[0] in AGENTS:
-        return names[0]
-    if names[0] in INTERPRETERS or names[0].startswith("python3."):
-        script = next((name for name in names[1:] if not name.startswith("-")), None)
         if script in AGENTS:
             return script
     return None
@@ -113,7 +118,7 @@ def default_title(title: str, hosts: set[str]) -> bool:
     if title in hosts:
         return True
     # Known shell formats: "user@host", "user@host:<cwd>", "user@host <cwd>" (cwd starts with ~ or /).
-    return any(re.fullmatch(r"[^@\s]+@" + re.escape(host) + r"(?::.*|\s+[~/]\S*)?", title) for host in hosts)
+    return any(re.fullmatch(r"[^@\s]+@" + re.escape(host) + r"(?::.*|\s+[~/].*)?", title) for host in hosts)
 
 
 def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child) -> list[Session]:

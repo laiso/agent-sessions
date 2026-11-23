@@ -103,3 +103,24 @@ class TmuxTests(unittest.TestCase):
         for title in (f"user@{host} ~/src", f"user@{host} /tmp"):
             row, = self.read(record(title=title))
             self.assertEqual(row.pane, "1.0")
+
+    def test_interpreter_review_round_two(self):
+        cases = [
+            (["node", "--eval=setInterval(()=>{},1)", "claude"], None),
+            (["python3", "-cimport time", "codex"], None),
+            (["python3", "-maider"], "aider"),
+            (["deno", "run", "-c", "deno.json", "/x/claude"], "claude"),
+            (["bun", "-c", "bunfig.toml", "/x/claude"], "claude"),
+            (["npx", "--workspace", "claude", "other-tool"], None),
+            (["uv", "run", "--with-requirements", "requirements.txt", "aider"], "aider"),
+            (["uv", "run", "tool", "claude"], None),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                row, = self.read(record(), argv=argv)
+                self.assertEqual(row.agent, expected)
+
+    def test_default_title_with_spaces_in_path_hidden(self):
+        host = socket.gethostname()
+        row, = self.read(record(title=f"user@{host} /tmp/project files"))
+        self.assertEqual(row.pane, "1.0")
