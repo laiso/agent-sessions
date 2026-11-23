@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -82,6 +83,17 @@ class OrcaTests(unittest.TestCase):
                 raise exc
             with self.subTest(exc=exc), self.assertRaises(SourceError):
                 orca.collect(fail)
+
+    def test_valid_empty_bot_list_queries_state_only_on_macos(self):
+        for system in ("Darwin", "Linux"):
+            runner = Mock(side_effect=[response('{"ok":true,"result":{"bots":[]}}'),
+                                       response('{"result":{"worktrees":[]}}')])
+            with self.subTest(system=system), patch("platform.system", return_value=system):
+                self.assertEqual(orca.collect(runner), [])
+                expected = [[self.cli, "bot", "list", "--json"]]
+                if system == "Darwin":
+                    expected.append([self.cli, "worktree", "ps", "--json"])
+                self.assertEqual([call.args[0] for call in runner.call_args_list], expected)
 
     def test_no_cli(self):
         with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home, "PATH": home}, clear=True):
@@ -216,7 +228,7 @@ class PathDiscoveryTests(unittest.TestCase):
     def test_platform_installations(self):
         home = Path(self.env["HOME"])
         root = home / "root"
-        bundle = "Applications/Orca Desktop.app/Contents/MacOS/orca"
+        bundle = "Applications/Orca.app/Contents/Resources/bin/orca"
         shim, system_app, user_app = home / ".local/bin/orca", root / bundle, home / bundle
         for path in (shim, system_app, user_app):
             path.parent.mkdir(parents=True)
@@ -238,7 +250,7 @@ class PathDiscoveryTests(unittest.TestCase):
     def test_macos_stale_shim_only_retries_first_eligible_bundle(self):
         home = Path(self.env["HOME"])
         root = home / "root"
-        bundle = "Applications/Orca Desktop.app/Contents/MacOS/orca"
+        bundle = "Applications/Orca.app/Contents/Resources/bin/orca"
         shim, app = home / ".local/bin/orca", root / bundle
         for path in (shim, app, home / bundle):
             path.parent.mkdir(parents=True)
@@ -253,3 +265,47 @@ class PathDiscoveryTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in runner.call_args_list],
                          [[str(shim), "bot", "list", "--json"], [str(app), "bot", "list", "--json"],
                           [str(app), "worktree", "ps", "--json"]])
+
+    def test_macos_resources_cli_only(self):
+        home = Path(self.env["HOME"])
+        root = home / "root"
+        app = root / "Applications/Orca.app/Contents/Resources/bin/orca"
+        app.parent.mkdir(parents=True)
+        self.executable(app)
+        self.assertEqual(list(orca.cli_candidates(self.env, system="Darwin", root=root)), [str(app)])
+
+    def test_macos_bundle_order_before_legacy(self):
+        home = Path(self.env["HOME"])
+        root = home / "root"
+        paths = [base / bundle for bundle in ("Applications/Orca.app/Contents/Resources/bin/orca",
+                                              "Applications/Orca Desktop.app/Contents/MacOS/orca")
+                 for base in (root, home)]
+        for path in paths:
+            path.parent.mkdir(parents=True)
+            self.executable(path)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(list(orca.cli_candidates(self.env, system="Darwin", root=root)), [str(path)])
+                path.chmod(0o777)  # Force selection of the next eligible installation.
+
+    def test_macos_uppercase_electron_is_never_a_candidate(self):
+        home = Path(self.env["HOME"])
+        root = home / "root"
+        aliases = {}
+        for base in (root, home):
+            for name in ("Orca.app", "Orca Desktop.app"):
+                gui = base / "Applications" / name / "Contents/MacOS/Orca"
+                gui.parent.mkdir(parents=True)
+                self.executable(gui)
+                aliases[gui.with_name("orca")] = gui
+        self.assertEqual(list(orca.cli_candidates(self.env, system="Darwin", root=root)), [])
+
+        # Emulate case-insensitive stat/access. Directory entries retain their
+        # real spelling, as on a default macOS volume.
+        stat_path, access = Path.stat, os.access
+        with patch.object(Path, "stat", lambda path: stat_path(aliases.get(path, path))), patch(
+            "os.access", side_effect=lambda path, mode: access(aliases.get(path, path), mode)
+        ):
+            for lower in aliases:
+                self.assertTrue(stat.S_ISREG(lower.stat().st_mode) and os.access(lower, os.X_OK))
+            self.assertEqual(list(orca.cli_candidates(self.env, system="Darwin", root=root)), [])

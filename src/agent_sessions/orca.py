@@ -18,10 +18,13 @@ def cli_candidates(env: Mapping[str, str], *, system: str | None = None, root: P
 
     home = Path(env["HOME"]) if env.get("HOME") else Path.home()
     system = platform.system() if system is None else system
+    legacy_binaries = ()
     if system == "Darwin":
-        bundle = Path("Applications/Orca Desktop.app/Contents/MacOS/orca")
+        bundle = Path("Applications/Orca.app/Contents/Resources/bin/orca")
+        legacy = Path("Applications/Orca Desktop.app/Contents/MacOS/orca")
+        legacy_binaries = (root / legacy, home / legacy)
         shim = home / ".local/bin/orca"
-        binaries = (root / bundle, home / bundle)
+        binaries = (root / bundle, home / bundle, *legacy_binaries)
     elif system == "Linux":
         config = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
         if not config.is_absolute():
@@ -35,6 +38,9 @@ def cli_candidates(env: Mapping[str, str], *, system: str | None = None, root: P
         if not path.is_absolute():
             continue
         try:
+            # Case-insensitive lookup can otherwise resolve the Electron GUI, Orca.
+            if path in legacy_binaries and "orca" not in os.listdir(path.parent):
+                continue
             info = path.stat()
         except OSError:
             continue
@@ -103,7 +109,7 @@ def collect(runner: Runner | None = None) -> list[Session]:
         return records(runner, [cli, command, action, "--json"], key)
 
     bots = read("bot", "list", "bots")
-    if not bots:
+    if not bots and platform.system() != "Darwin":
         return []
     try:
         worktrees = read("worktree", "ps", "worktrees")

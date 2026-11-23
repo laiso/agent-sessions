@@ -44,7 +44,7 @@ Set `AGENT_SESSIONS_ORCA` to select a CLI explicitly. It takes precedence over `
 | Platform | Registered shim | Application, in search order |
 |---|---|---|
 | Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca` | `~/.local/opt/orca/orca.AppImage` |
-| macOS | `~/.local/bin/orca` (Orca Settings → General → Orca CLI) | `/Applications/Orca Desktop.app/Contents/MacOS/orca`, then `~/Applications/Orca Desktop.app/Contents/MacOS/orca` |
+| macOS | `~/.local/bin/orca` (Orca Settings → General → Orca CLI) | `/Applications/Orca.app/Contents/Resources/bin/orca`, `~/Applications/Orca.app/Contents/Resources/bin/orca`, then the legacy paths `/Applications/Orca Desktop.app/Contents/MacOS/orca` and `~/Applications/Orca Desktop.app/Contents/MacOS/orca` (exact lowercase filename required) |
 
 Automatic candidates must resolve to executable regular files owned by the current user or root, without group or other write permission. If the registered shim reports `Orca CLI is unavailable`, the launcher retries that query once with the first eligible application. The only Orca queries are `bot list --json` and `worktree ps --json`, with a 15-second timeout each.
 
@@ -88,7 +88,7 @@ python3 -m unittest discover -s tests
 E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh
 ```
 
-The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
+The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test (E9) also accepts an empty bot list and checks both CLI queries. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
 
 Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
 

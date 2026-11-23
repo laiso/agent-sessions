@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = "e2e-日本語"
 APPIMAGE = Path.home() / ".local/opt/orca/orca.AppImage"
-MAC_BUNDLE = Path("Applications/Orca Desktop.app/Contents/MacOS/orca")
+MAC_BUNDLE = Path("Applications/Orca.app/Contents/Resources/bin/orca")
 
 
 class LiveTests(unittest.TestCase):
@@ -71,15 +71,15 @@ class LiveTests(unittest.TestCase):
                 return path
         self.unavailable("no eligible Orca application at a known location")
 
-    def bots(self):
-        data = self.reference(str(self.orca_binary()), "bot", "list", "--json")
+    def bots(self, *, allow_empty=False, binary=None):
+        data = self.reference(str(binary or self.orca_binary()), "bot", "list", "--json")
         if not isinstance(data, dict) or data.get("ok") is not True:
             self.unavailable("Orca bot list unavailable")
         result = data.get("result")
         bots = result.get("bots") if isinstance(result, dict) else None
         if not isinstance(bots, list) or not all(isinstance(b, dict) and isinstance(b.get("name"), str) for b in bots):
             self.unavailable("Orca bot list is malformed")
-        if not bots:
+        if not bots and not allow_empty:
             self.unavailable("Orca has no bots")
         return bots
 
@@ -296,12 +296,14 @@ class LiveTests(unittest.TestCase):
     @unittest.skipUnless(platform.system() == "Darwin", "not macOS")
     def test_E9_macos_orca_bundle(self):
         binary = self.orca_binary()
-        bots = self.bots()
-        # Hide the registered user shim while retaining access to app state.
-        home = self.tmp / "home"
-        home.mkdir()
-        for name in ("Applications", "Library", ".orca", ".config"):
-            (home / name).symlink_to(Path.home() / name, target_is_directory=True)
+        bots = self.bots(binary=binary, allow_empty=True)
+        home = Path.home()
+        if (home / ".local/bin/orca").exists():
+            # Hide the registered shim but keep access to the application and its state.
+            home = self.tmp / "home"
+            home.mkdir()
+            for name in ("Applications", "Library", ".orca", ".config"):
+                (home / name).symlink_to(Path.home() / name, target_is_directory=True)
         log = self.tmp / "launches.jsonl"
         env = dict(self.discovery_env(), HOME=str(home), PYTHONPATH=str(ROOT / "tests_e2e/trace"),
                    AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
