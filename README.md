@@ -31,3 +31,28 @@ Herdr はエージェントの内部状態を表示します。tmux の `running
 終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。
 
 テストはリポジトリ直下で `python3 -m unittest discover -s tests` を実行してください。仕様の詳細は [設計書](docs/design.md) にあります。
+
+## ペインにメッセージを送る
+
+`send` は一覧と同じ情報から対象を解決し、そのペイン ID に本文と Enter を送ります。シェルが開いているペインでは、既定の Enter により入力したコマンドが実行されます。
+
+```sh
+./agent-sessions send --dry-run herdr:wsh-2027-pre/1 '進捗を教えてください'
+./agent-sessions send herdr:wN:pH '進捗を教えてください'
+./agent-sessions send tmux:demo echo hello
+./agent-sessions send --no-enter tmux:demo:0.0 -- '--help'
+./agent-sessions send --dry-run --format json tmux:%12 '次の作業は？'
+```
+
+最初の例の出力
+
+```text
+Would send to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
+> 進捗を教えてください ⏎
+```
+
+Herdr は `herdr:<セッション>/<ペイン>` または `herdr:<ペインID>`、tmux は `tmux:<セッション>`、`tmux:<セッション>:<窓>.<ペイン>`、`tmux:%<ID番号>` で指定します。tmux のセッション名だけを指定すると、そのセッションのアクティブなペインを選びます。名前での指定は接頭辞を省くと両方のソースを検索し、候補が複数あれば一覧を stderr に出します。
+
+本文の引数は空白1つで連結します。ハイフンから始まる本文の前には `--` を置きます。本文は4096文字までで、空白だけの本文と、改行などの制御文字（タブを除く）は使えません。`--no-enter` は入力のみ、`--dry-run` は対象と本文のプレビューです。
+
+`send` の終了コードは成功・プレビューが `0`、引数エラーが `2`、全ソースの読み取り失敗が `3`、対象なし・終了済みペインが `4`、複数候補が `5`、送信失敗が `6` です。

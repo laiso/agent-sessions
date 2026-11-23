@@ -14,6 +14,11 @@ class CliTests(unittest.TestCase):
             code = main(args, runner)
         return code, out.getvalue(), err.getvalue()
 
+    def test_list_alias(self):
+        args = ["--source", "tmux", "--format", "json"]
+        runner = lambda argv: response("")
+        self.assertEqual(self.invoke(args, runner), self.invoke(["list", *args], runner))
+
     def test_partial_success(self):
         def runner(argv):
             if argv[0] == "herdr":

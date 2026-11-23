@@ -1,6 +1,5 @@
 import json
 import os
-from dataclasses import asdict
 
 from .model import Session
 from .textwidth import display_width, truncate
@@ -9,7 +8,7 @@ HEADINGS = ["SOURCE", "SESSION", "PANE", "AGENT", "STATUS", "COMMAND", "CWD"]
 
 
 def render_json(sessions: list[Session]) -> str:
-    return json.dumps([asdict(session) for session in sessions], indent=2, ensure_ascii=False)
+    return json.dumps([session.record() for session in sessions], indent=2, ensure_ascii=False)
 
 
 def short_path(path: str | None) -> str:

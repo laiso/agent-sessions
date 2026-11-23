@@ -3,7 +3,7 @@ import socket
 from collections.abc import Callable
 from pathlib import Path
 
-from .model import Session, SourceError
+from .model import Session, SourceError, TmuxSession
 from .runner import Runner, output
 
 FIELDS = ("session_name", "window_index", "pane_index", "pane_id", "pane_title",
@@ -133,7 +133,8 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         try:
             session, win, idx, pid, title, current, shell_pid, dead, active, win_active, attached, cwd = line.split(SEPARATOR)
             key = session, int(win), int(idx)
-            focused = int(attached) > 0 and active == win_active == "1"
+            is_active = active == win_active == "1"
+            focused = int(attached) > 0 and is_active
         except ValueError as exc:
             raise SourceError("invalid tmux list-panes record") from exc
         argv = proc_reader(shell_pid) or ([current] if current else [])
@@ -147,6 +148,6 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         pane = f"{win}.{idx}"
         if title and not default_title(title, hosts):
             pane += " " + title
-        rows.append((key, Session("tmux", session, pane, pid, agent, status,
-                                  " ".join(argv) or None, cwd or None, focused)))
+        rows.append((key, TmuxSession("tmux", session, pane, pid, agent, status,
+                                  " ".join(argv) or None, cwd or None, focused, is_active)))
     return [row for _, row in sorted(rows, key=lambda item: item[0])]
