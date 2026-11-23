@@ -1,37 +1,48 @@
 import json
 import os
-import shutil
-from collections.abc import Callable, Mapping
+import stat
+from collections.abc import Mapping
 from functools import partial
+from pathlib import Path
 
 from .model import Session, SourceError
 from .runner import Runner, output, run
 
 
-def screen_reader(path: str) -> bool:
-    """True for GNOME's Orca screen reader, which is also installed as `orca`.
-
-    Running it with `bot list --json` could start speech output, so a PATH hit
-    that is that Python program is skipped. Unreadable files are not rejected.
-    """
-    try:
-        with open(path, "rb") as handle:
-            head = handle.read(65536)
-    except OSError:
-        return False
-    return head.startswith(b"#!") and b"python" in head.split(b"\n", 1)[0] and (
-        b"from orca import" in head or b"import orca" in head or b"screen reader" in head.lower())
-
-
-def find_cli(env: Mapping[str, str], which: Callable[[str], str | None],
-             is_screen_reader: Callable[[str], bool] = screen_reader) -> str | None:
+def find_cli(env: Mapping[str, str]) -> str | None:
     explicit = env.get("AGENT_SESSIONS_ORCA") or env.get("ORCA_CLI_COMMAND")
     if explicit:
         return explicit
+
+    home = Path(env["HOME"]) if env.get("HOME") else Path.home()
+    config = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
+    if not config.is_absolute():
+        config = home / ".config"
+    installations = (config / "orca/linux-orca-cli-shim/orca", home / ".local/opt/orca/orca.AppImage")
+    known_files = {}
+    for path in installations:
+        if not path.is_absolute():
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and os.access(path, os.X_OK):
+            known_files[info.st_dev, info.st_ino] = path
+    if not known_files:
+        return None
+
+    # A PATH alias may point to either installation. Invoke the known path
+    # itself so a later change to the alias cannot redirect the command.
     for name in ("orca", "orca.AppImage"):
-        path = which(name)
-        if path and not is_screen_reader(path):
-            return path
+        for directory in os.get_exec_path(env):
+            try:
+                info = (Path(directory) / name).stat()
+            except OSError:
+                continue
+            match = known_files.get((info.st_dev, info.st_ino))
+            if match is not None:
+                return str(match)
     return None
 
 
@@ -74,7 +85,7 @@ def optional_text(value: object) -> str | None:
 def collect(runner: Runner | None = None) -> list[Session]:
     if runner is None:
         runner = partial(run, timeout=15)
-    cli = find_cli(os.environ, shutil.which)
+    cli = find_cli(os.environ)
     if not cli:
         raise SourceError("Orca CLI unavailable")
     bots = records(runner, [cli, "bot", "list", "--json"], "bots")

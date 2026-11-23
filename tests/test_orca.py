@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -82,20 +84,16 @@ class OrcaTests(unittest.TestCase):
                 orca.collect(fail)
 
     def test_no_cli(self):
-        with patch.dict(os.environ, {}, clear=True), patch("shutil.which", return_value=None):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home, "PATH": home}, clear=True):
             with self.assertRaises(SourceError):
                 orca.collect(self.runner)
         self.assertEqual(self.calls, [])
 
     def test_cli_discovery_order(self):
-        paths = {"orca": "/bin/orca", "orca.AppImage": "/bin/orca.AppImage"}
         env = {"AGENT_SESSIONS_ORCA": "/override", "ORCA_CLI_COMMAND": "/shim"}
-        self.assertEqual(orca.find_cli(env, paths.get), "/override")
+        self.assertEqual(orca.find_cli(env), "/override")
         env["AGENT_SESSIONS_ORCA"] = ""
-        self.assertEqual(orca.find_cli(env, paths.get), "/shim")
-        self.assertEqual(orca.find_cli({}, paths.get), "/bin/orca")
-        del paths["orca"]
-        self.assertEqual(orca.find_cli({}, paths.get), "/bin/orca.AppImage")
+        self.assertEqual(orca.find_cli(env), "/shim")
 
     def test_orca_timeout_is_local_to_orca(self):
         with patch("subprocess.run", side_effect=self.subprocess_run) as mocked:
@@ -107,23 +105,69 @@ class OrcaTests(unittest.TestCase):
         return self.runner(argv) if argv[0] == self.cli else response()
 
 
-class ScreenReaderTests(unittest.TestCase):
-    """GNOME's screen reader is also `orca` on PATH; never run it."""
+class PathDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        self.first = home / "first"
+        self.last = home / "last"
+        self.first.mkdir()
+        self.last.mkdir()
+        self.env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
+                    "PATH": os.pathsep.join(map(str, (self.first, self.last)))}
+        self.shim = home / "config/orca/linux-orca-cli-shim/orca"
+        self.image = home / ".local/opt/orca/orca.AppImage"
+        for path in (self.shim, self.image):
+            path.parent.mkdir(parents=True)
+            self.executable(path)
 
-    def test_screen_reader_on_path_is_skipped(self):
-        import tempfile, os
-        from agent_sessions.orca import find_cli, screen_reader
-        with tempfile.TemporaryDirectory() as d:
-            reader = os.path.join(d, "orca")
-            with open(reader, "w") as f:
-                f.write("#!/usr/bin/python3\n# Orca screen reader\nfrom orca import orca\norca.main()\n")
-            shim = os.path.join(d, "shim")
-            with open(shim, "w") as f:
-                f.write("#!/usr/bin/env bash\nexec /tmp/x/resources/bin/orca-ide \"$@\"\n")
-            self.assertTrue(screen_reader(reader))
-            self.assertFalse(screen_reader(shim))
-            self.assertFalse(screen_reader(os.path.join(d, "missing")))
-            paths = {"orca": reader, "orca.AppImage": "/opt/orca.AppImage"}
-            self.assertEqual(find_cli({}, paths.get), "/opt/orca.AppImage")
-            self.assertIsNone(find_cli({}, {"orca": reader}.get))
-            self.assertEqual(find_cli({"ORCA_CLI_COMMAND": shim}, paths.get), shim)
+    @staticmethod
+    def executable(path, data=b"#!/bin/sh\nexit 0\n"):
+        path.write_bytes(data)
+        path.chmod(0o700)
+
+    def test_unknown_candidates_never_reach_runner(self):
+        for data in (b"#!/bin/sh\nexit 0\n", b"#!/usr/bin/python3\nfrom orca import orca\n",
+                     b"#!/usr/bin/python3\nfrom importlib import import_module\n", b"\x7fELF"):
+            with self.subTest(data=data), patch.dict(os.environ, self.env, clear=True):
+                self.executable(self.first / "orca", data)
+                self.executable(self.last / "orca.AppImage", b"\x7fELF" + bytes(4) + b"AI\x02")
+                with self.assertRaises(SourceError):
+                    orca.collect(lambda argv: self.fail(f"unexpected command: {argv}"))
+
+    def test_skip_unrecognized_first_orca_before_appimage(self):
+        self.executable(self.first / "orca")
+        (self.first / "orca.AppImage").symlink_to(self.image)
+        (self.last / "orca").symlink_to(self.shim)
+        self.assertEqual(orca.find_cli(self.env), str(self.shim))
+        self.shim.chmod(0o600)
+        self.assertEqual(orca.find_cli(self.env), str(self.image))
+
+    def test_first_recognized_orca_in_path_order(self):
+        (self.first / "orca").symlink_to(self.image)
+        (self.last / "orca").symlink_to(self.shim)
+        self.assertEqual(orca.find_cli(self.env), str(self.image))
+        self.env["PATH"] = os.pathsep.join(map(str, (self.last, self.first)))
+        self.assertEqual(orca.find_cli(self.env), str(self.shim))
+
+    def test_registered_file_reached_through_symlink_chain(self):
+        alias = self.last / "alias"
+        alias.symlink_to(self.shim)
+        (self.first / "orca").symlink_to(alias)
+        calls = []
+        with patch.dict(os.environ, self.env, clear=True):
+            rows = orca.collect(lambda argv: calls.append(argv) or response('{"ok":true,"result":{"bots":[]}}'))
+        self.assertEqual(rows, [])
+        self.assertEqual(calls, [[str(self.shim), "bot", "list", "--json"]])
+        self.shim.unlink()
+        self.assertIsNone(orca.find_cli(self.env))
+
+    def test_explicit_standalone_image_wins_over_path(self):
+        image = self.first / "orca.AppImage"
+        self.executable(image)
+        (self.last / "orca").symlink_to(self.shim)
+        self.env["ORCA_CLI_COMMAND"] = str(image)
+        self.assertEqual(orca.find_cli(self.env), str(image))
+        self.env["AGENT_SESSIONS_ORCA"] = "/nonexistent"
+        self.assertEqual(orca.find_cli(self.env), "/nonexistent")

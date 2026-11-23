@@ -33,6 +33,8 @@ Orca の行はボットごとに1行です。SESSION はボット名、PANE は 
 
 Orca CLI は `AGENT_SESSIONS_ORCA`、`ORCA_CLI_COMMAND`、PATH の `orca`、`orca.AppImage` の順に探します。Orca の一覧には `bot list --json` と `worktree ps --json` を使い、各呼び出しを最大15秒待ちます。Orca のボットは一覧専用です。
 
+PATH の自動検出では、Orca IDE の登録済み shim（`${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca`）または `~/.local/opt/orca/orca.AppImage` と同じ実行ファイルを選びます。これらを指すシンボリックリンクも使えます。別の場所に置いた単体 AppImage や独自ラッパーを使う場合は `AGENT_SESSIONS_ORCA=/path/to/orca.AppImage` を指定してください。
+
 終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。`--source orca` 単独でボット一覧を取得できない場合も警告なしの0件・終了 `0` です。`all` では取得できなかった Orca は成功ソースに数えません。
 
 テストはリポジトリ直下で `python3 -m unittest discover -s tests` を実行してください。仕様の詳細は [設計書](docs/design.md) にあります。
