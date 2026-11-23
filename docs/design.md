@@ -476,8 +476,10 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 | Linux | 1 | `${XDG_CONFIG_HOME:-~/.config}/orca/linux-orca-cli-shim/orca` | shim |
 | Linux | 2 | `~/.local/opt/orca/orca.AppImage` | 本体 |
 | macOS | 1 | `~/.local/bin/orca` | shim（設定 → General → Orca CLI で登録したもの） |
-| macOS | 2 | `/Applications/Orca Desktop.app/Contents/MacOS/orca` | 本体 |
-| macOS | 3 | `~/Applications/Orca Desktop.app/Contents/MacOS/orca` | 本体 |
+| macOS | 2 | `/Applications/Orca.app/Contents/Resources/bin/orca` | 同梱の CLI（v5.1 で修正。実機で確認済み） |
+| macOS | 3 | `~/Applications/Orca.app/Contents/Resources/bin/orca` | 同梱の CLI |
+| macOS | 4 | `/Applications/Orca Desktop.app/Contents/MacOS/orca` | 旧名の予備（公式ドキュメントの記載。実機では未確認） |
+| macOS | 5 | `~/Applications/Orca Desktop.app/Contents/MacOS/orca` | 旧名の予備 |
 
 - 出典：Orca 公式ドキュメント（https://orca-desktop.com/docs/cli/）。
 - 偽物を実行しない条件（実体が通常ファイルで実行でき、所有者が自分か root、`mode & 0o022 == 0`）は、どのパスにも同じように適用する。
@@ -533,6 +535,21 @@ README.md は英語で書き直す。日本語版は残さない。次の 13 点
 11. テストの節に、安全上の注意（実機の E2E は、既存の Herdr のペインや Orca のボットに入力を送らないこと。送信は、一時的に立てた隔離 tmux サーバーにだけ行うこと）を書く。設計書が日本語であることも書く
 12. 例に出てくる実在のワークスペース名やパス（`wsh-2027-pre`、`~/Work/laiso/...` など）を、汎用のもの（`my-app`、`~/work/my-app`）に置き換える。出力例も同様
 13. 対応プラットフォーム：Linux が主。macOS にも対応する（Orca はアプリ本体か登録済みの shim を自動検出、tmux のプロセス情報は `ps`）。§13.4 と §13.5 の macOS の制限も書く
+
+### 13.8 macOS の Orca の配置の修正（v5.1）
+
+- 誤り：v5 の設計者（claude）は、公式ドキュメントの `/Applications/Orca Desktop.app/Contents/MacOS/orca` を、実機で確かめずに採用した。単体テストは偽のファイルシステムで、E9 は Linux では skip されるため、誰も実機の配置と突き合わせていなかった。
+- 実機（Mac mini、2026-11-23、クライアントが確認）：
+  - `/Applications/Orca Desktop.app` は存在しない
+  - `/Applications/Orca.app/Contents/MacOS/` には Electron 本体の `Orca`（CLI ではない）しかない
+  - CLI は `/Applications/Orca.app/Contents/Resources/bin/orca` にあり、`bot list --json` が動く
+  - `~/.local/bin/orca`（登録済みの shim）はない
+- 修正後の順番：§13.3 の表（shim → Orca.app の同梱 CLI（/Applications、~/Applications）→ 旧名 Orca Desktop.app（/Applications、~/Applications））。どれも §12.2 の安全条件をそのまま適用し、shim のあとに使う本体は、条件を満たす最初の1つだけにする（v5 と同じ）。
+- `Contents/MacOS/Orca`（大文字の O。Electron のアプリ本体）は、CLI ではないので候補に入れない。大文字と小文字を区別しないファイルシステムでは、`Contents/MacOS/orca` が `Orca` と同じファイルに当たり、アプリの画面を開いてしまうおそれがある。このため、旧名の予備として残す `Orca Desktop.app/Contents/MacOS/orca` についても、実体のファイル名が小文字の `orca` であるかを確かめる（`os.listdir` で、親ディレクトリに `orca` という名前そのものがあること）。
+- E9（macOS のみ）：本物の macOS で、見つかった CLI が `Orca.app/Contents/Resources/bin/orca` であることを、起動の記録（tests_e2e/trace と同じ方式）で確かめる。そのうえで、ボット名の集合が、その CLI を直接呼んだ `bot list --json` と一致することを確かめる。ボットが 0 件でも、「CLI が見つかって `bot list` と `worktree ps` が呼ばれたこと」を確かめれば合格とする（Mac にはまだボットがいないため）。
+- 単体テスト：偽のルートに `Orca.app/Contents/Resources/bin/orca` を置いて選ばれること、Orca.app と Orca Desktop.app の両方がある場合は Orca.app が選ばれること、`Contents/MacOS/Orca`（大文字）しかない場合は何も選ばれないこと、を確かめる。
+- README の macOS の行も、同じ順番に直す。
+- 既知の制限：claude と codex の作業環境からは、Mac mini に SSH で入れない（`Permission denied (publickey,...)`）。そのため、macOS の実機での E9 の実行は、クライアントにお願いする（コマンドは報告に書く）。
 
 ### 13.7 完了条件（v5）
 
