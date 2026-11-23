@@ -1,3 +1,4 @@
+import re
 import socket
 from collections.abc import Callable
 from pathlib import Path
@@ -14,19 +15,32 @@ AGENTS = {"claude", "codex", "gemini", "agy", "opencode", "aider", "cursor-agent
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "nu"}
 
 
+def read_cmdline(proc: Path) -> list[str]:
+    raw = (proc / "cmdline").read_bytes()
+    return raw.removesuffix(b"\0").decode(errors="replace").split("\0") if raw else []
+
+
 def read_child(pid: str) -> list[str]:
+    """Return argv of the pane's last child process, or of the pane process itself."""
     if not pid.isdecimal():
         return []
     parent = Path("/proc") / pid
     try:
         children = (parent / "task" / pid / "children").read_text().split()
         if children:
-            raw = (parent.parent / children[-1] / "cmdline").read_bytes()
-            if raw:
-                return raw.removesuffix(b"\0").decode(errors="replace").split("\0")
+            argv = read_cmdline(parent.parent / children[-1])
+            if argv:
+                return argv
+        return read_cmdline(parent)
     except OSError:
-        pass
-    return []
+        return []
+
+
+def default_title(title: str, hosts: set[str]) -> bool:
+    """True for titles tmux or the shell set automatically (hostname, user@host:cwd)."""
+    if title in hosts:
+        return True
+    return any(re.match(r"[^@\s]+@" + re.escape(host) + r"(?=[:\s]|$)", title) for host in hosts)
 
 
 def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child) -> list[Session]:
@@ -53,7 +67,7 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         elif len(names) == 1 and names[0].lstrip("-") in SHELLS:
             status = "shell"
         pane = f"{win}.{idx}"
-        if title and title not in hosts:
+        if title and not default_title(title, hosts):
             pane += " " + title
         rows.append((key, Session("tmux", session, pane, pid, agent, status,
                                   " ".join(argv) or None, cwd or None, focused)))

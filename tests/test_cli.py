@@ -42,3 +42,12 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.invoke(["--source", "unknown"], None)
         self.assertEqual(caught.exception.code, 2)
+
+
+class ErrorMessageTests(unittest.TestCase):
+    def test_json_error_message(self):
+        from agent_sessions.runner import error_message
+        raw = '{"id":"x","error":{"code":"server_not_running","message":"no herdr server is running"}}'
+        self.assertEqual(error_message(raw), "no herdr server is running")
+        self.assertEqual(error_message("plain failure\n"), "plain failure")
+        self.assertEqual(error_message('{"error": 1}'), '{"error": 1}')

@@ -3,7 +3,7 @@ import unittest
 
 from support import response
 from agent_sessions.model import SourceError
-from agent_sessions.tmux import collect
+from agent_sessions.tmux import collect, read_child
 
 
 def record(win="1", idx="0", title="", current="bash", dead="0", active="1", attached="2"):
@@ -53,3 +53,18 @@ class TmuxTests(unittest.TestCase):
     def test_invalid_output(self):
         with self.assertRaises(SourceError):
             self.read("bad record")
+
+    def test_shell_default_titles_hidden(self):
+        host = socket.gethostname()
+        for title in (f"kk@{host}:/tmp/dev", f"kk@{host}", f"root@{host} ~"):
+            row, = self.read(record(title=title))
+            self.assertEqual(row.pane, "1.0")
+        row, = self.read(record(title=f"kk@{host}-other:/x"))
+        self.assertEqual(row.pane, f"1.0 kk@{host}-other:/x")
+
+    def test_read_child_falls_back_to_own_cmdline(self):
+        import os
+        argv = read_child(str(os.getpid()))
+        self.assertTrue(argv)
+        self.assertEqual(read_child("not-a-pid"), [])
+        self.assertEqual(read_child("999999999"), [])
