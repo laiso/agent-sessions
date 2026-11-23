@@ -307,10 +307,19 @@ class LiveTests(unittest.TestCase):
         log = self.tmp / "launches.jsonl"
         env = dict(self.discovery_env(), HOME=str(home), PYTHONPATH=str(ROOT / "tests_e2e/trace"),
                    AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
-        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        # Orca alone also returns [] and exits 0 on failure. With the other
+        # sources unavailable, "all" exits 0 only if it read a valid bot list.
+        for name in ("herdr", "tmux"):
+            stub = self.tmp / name
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o700)
+        env["PATH"] = f"{self.tmp}:{env['PATH']}"
+        rows = json.loads(self.cli("--source", "all", "--format", "json", env=env))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
         expected = str(binary if binary == Path("/") / MAC_BUNDLE else home / MAC_BUNDLE)
         # The state query runs only when there are bots (same rule on every OS).
         queries = [("bot", "list")] + ([("worktree", "ps")] if bots else [])
-        self.assertEqual([json.loads(line) for line in log.read_text().splitlines()],
+        launches = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([exe for exe, _ in launches[:2]], ["herdr", "tmux"])
+        self.assertEqual(launches[2:],
                          [[expected, [expected, *query, "--json"]] for query in queries])

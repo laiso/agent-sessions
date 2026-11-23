@@ -88,7 +88,7 @@ python3 -m unittest discover -s tests
 E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh
 ```
 
-The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test (E9) also accepts an empty bot list and checks both CLI queries. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
+The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test (E9) checks that the bundled CLI runs `bot list --json` once. An empty list completes E9 successfully. A nonempty list must be followed by one `worktree ps --json` query. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
 
 Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
 
