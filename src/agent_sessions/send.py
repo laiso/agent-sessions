@@ -45,7 +45,8 @@ def tmux_command(target: TmuxSession, data: str, buf: str) -> list[str]:
     check = f"#{{==:{DELIVERY_IDENTITY}:#{{pane_dead}}:#{{pane_input_off}},{expected}:0:0}}"
     return ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(data),
             ";", "if-shell", "-F", "-t", pid, check,
-            f"paste-buffer -d -b {buf} -t {pid}", "display-message -p pane-unavailable"]
+            f"paste-buffer -d -b {buf} -t {pid} ; display-message -p {buf}-pasted",
+            f"display-message -p {buf}-refused"]
 
 
 class PaneUnavailable(SourceError):
@@ -56,14 +57,21 @@ def tmux_paste(target: TmuxSession, data: str, runner: Runner) -> None:
     buf = f"agent-sessions-{uuid.uuid4().hex}"
     argv = tmux_command(target, data, buf)
     try:
-        if output(runner, argv).strip() == "pane-unavailable":
+        # Hooks can print their own lines on this client. Only the selected
+        # branch's acknowledgement describes this particular paste.
+        lines = output(runner, argv).splitlines()
+        pasted = f"{buf}-pasted" in lines
+        refused = f"{buf}-refused" in lines
+        if refused and not pasted:
             raise PaneUnavailable("target pane changed, exited, or has input disabled")
+        if not pasted or refused:
+            raise SourceError("missing or conflicting tmux paste acknowledgement")
     except SourceError as exc:
         try:
             output(runner, ["tmux", "delete-buffer", "-b", buf])
         except SourceError as cleanup:
             if str(cleanup) not in (f"no buffer {buf}", f"unknown buffer: {buf}"):
-                raise SourceError(f"{exc}; temporary buffer {buf} may remain ({cleanup})") from exc
+                raise type(exc)(f"{exc}; temporary buffer {buf} may remain ({cleanup})") from exc
         raise
 
 

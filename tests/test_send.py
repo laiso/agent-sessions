@@ -1,11 +1,16 @@
 import contextlib
 import io
 import json
+import subprocess
 import unittest
 
 from support import fixture, response
 from agent_sessions.cli import main
 from agent_sessions.send import message_text, tmux_command
+
+
+def paste_reply(argv):
+    return response(f"{argv[3]}-pasted\n")
 
 
 class SendTests(unittest.TestCase):
@@ -29,7 +34,7 @@ class SendTests(unittest.TestCase):
         self.calls.append(argv)
         if argv[-1] == self.fail_arg:
             return response(stdout='{"error":{"message":"pane unavailable"}}', code=1)
-        return response()
+        return paste_reply(argv) if argv[1] == "set-buffer" else response()
 
     def invoke(self, *args):
         with contextlib.redirect_stdout(self.out), contextlib.redirect_stderr(self.err):
@@ -71,6 +76,34 @@ class SendTests(unittest.TestCase):
                       status="shell", command="bash", cwd="/tmp", focused=False)
         self.assertEqual(json.loads(self.out.getvalue()), dict(sent=True, dry_run=False, enter=False,
                                                                target=target, message=text))
+
+    def test_enter_timeout_and_cleanup_diagnostics_in_cli(self):
+        def runner(argv):
+            if argv[1] == "delete-buffer":
+                return response(stderr="cleanup error\ndetail", code=1)
+            if argv[1] == "set-buffer" and argv[5] == "\n":
+                raise subprocess.TimeoutExpired(argv, 5)
+            return self.runner(argv)
+
+        with contextlib.redirect_stdout(self.out), contextlib.redirect_stderr(self.err):
+            code = main(["send", "tmux:dev", "hi"], runner)
+        self.assertEqual(code, 6)
+        self.assertEqual(self.out.getvalue(), "")
+        lines = self.err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("text sent, Enter delivery not confirmed", lines[0])
+        self.assertIn("may remain (cleanup error detail)", lines[0])
+        self.assertIn("timed out after 5 seconds", lines[0])
+        self.assertNotIn("321:123456:123", lines[0])
+
+    def test_list_and_send_keep_delivery_identity_private(self):
+        with contextlib.redirect_stdout(self.out):
+            self.assertEqual(main(["list", "--source", "tmux", "--format", "json"], self.runner), 0)
+        listed, = json.loads(self.out.getvalue())
+        self.out = io.StringIO()
+        self.assertEqual(self.invoke("--dry-run", "--format", "json", "tmux:dev", "hi"), 0)
+        self.assertNotIn("delivery_identity", listed)
+        self.assertEqual(json.loads(self.out.getvalue())["target"], listed)
 
     def test_tmux_enter(self):
         self.assertEqual(self.invoke("tmux:%8", "--", "-abc"), 0)
@@ -121,13 +154,13 @@ class TmuxSafetyTests(unittest.TestCase):
         """paste-buffer ignores synchronize-panes; buffer names never collide with the user's."""
         from agent_sessions.send import transmit
         calls = []
-        transmit(self.target(), "rm -rf x", True, lambda argv: calls.append(argv) or response())
+        transmit(self.target(), "rm -rf x", True, lambda argv: calls.append(argv) or paste_reply(argv))
         self.assertEqual(len(calls), 2)
         for argv, data in zip(calls, ["rm -rf x", "\n"]):
             self.assertNotIn("send-keys", argv)
             self.assertEqual(argv[1:6], ["set-buffer", "-b", argv[3], "--", data])
             self.assertEqual(argv[6:11], [";", "if-shell", "-F", "-t", "%3"])
-            self.assertEqual(argv[12], f"paste-buffer -d -b {argv[3]} -t %3")
+            self.assertEqual(argv[12], f"paste-buffer -d -b {argv[3]} -t %3 ; display-message -p {argv[3]}-pasted")
         self.assertRegex(calls[0][3], r"^agent-sessions-[0-9a-f]{32}$")
         self.assertNotEqual(calls[0][3], calls[1][3])
 
@@ -151,7 +184,9 @@ class TmuxSafetyTests(unittest.TestCase):
         def runner(argv):
             calls.append(argv)
             bad = argv[1] == "set-buffer" and argv[5] == "\n"
-            return response(stderr="can't find pane", code=1) if bad else response()
+            if bad:
+                return response(stderr="can't find pane", code=1)
+            return paste_reply(argv) if argv[1] == "set-buffer" else response()
         with self.assertRaisesRegex(SourceError, "^text sent, Enter delivery not confirmed"):
             transmit(self.target(), "hi", True, runner)
 
@@ -208,7 +243,7 @@ class DeliveryOutcomeTests(unittest.TestCase):
     def test_rejected_text_is_nothing_sent(self):
         from agent_sessions.model import SourceError
         from agent_sessions.send import transmit
-        runner = lambda argv: response("pane-unavailable\n") if argv[1] == "set-buffer" else response()
+        runner = lambda argv: response(f"{argv[3]}-refused\n") if argv[1] == "set-buffer" else response()
         with self.assertRaisesRegex(SourceError, "^nothing sent: target pane changed"):
             transmit(self.target(), "hi", True, runner)
 
@@ -220,7 +255,43 @@ class DeliveryOutcomeTests(unittest.TestCase):
         def runner(argv):
             calls.append(argv)
             if argv[1] == "set-buffer" and argv[5] == "\n":
-                return response("pane-unavailable\n")
-            return response()
+                return response(f"{argv[3]}-refused\n")
+            return paste_reply(argv) if argv[1] == "set-buffer" else response()
         with self.assertRaisesRegex(SourceError, "^text sent, Enter not sent"):
             transmit(self.target(), "hi", True, runner)
+
+    def test_cleanup_failure_preserves_rejection_of_either_stage(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        for reject, prefix in (("hi", "nothing sent"), ("\n", "text sent, Enter not sent")):
+            def runner(argv):
+                if argv[1] == "delete-buffer":
+                    return response(stderr="cleanup failed\nmore detail", code=1)
+                if argv[5] == reject:
+                    return response(f"notice\n{argv[3]}-refused\n")
+                return paste_reply(argv)
+
+            with self.subTest(reject=reject), self.assertRaises(SourceError) as error:
+                transmit(self.target(), "hi", True, runner)
+            self.assertTrue(str(error.exception).startswith(prefix))
+            self.assertRegex(str(error.exception), r"temporary buffer agent-sessions-[0-9a-f]{32} may remain")
+            self.assertIn("cleanup failed\nmore detail", str(error.exception))
+
+    def test_unconfirmed_replies_never_proceed_to_enter(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        for code, reply in ((0, ""), (0, "pane-unavailable"), (0, "{buf}-refused\n{buf}-pasted"),
+                            (1, "{buf}-refused")):
+            calls = []
+
+            def runner(argv):
+                calls.append(argv)
+                if argv[1] == "set-buffer":
+                    return response(reply.format(buf=argv[3]), "first line\nsecond line", code)
+                return response()
+
+            with self.subTest(reply=reply, code=code), self.assertRaisesRegex(SourceError, "^text delivery not confirmed") as error:
+                transmit(self.target(), "hi", True, runner)
+            self.assertEqual([a[1] for a in calls], ["set-buffer", "delete-buffer"])
+            if code:
+                self.assertIn("first line\nsecond line", str(error.exception))

@@ -14,7 +14,11 @@ def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
 def output(runner: Runner, argv: list[str], empty_errors: tuple[str, ...] = ()) -> str:
     try:
         result = runner(argv)
-    except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # TimeoutExpired's string includes argv, which can contain the message
+        # and the private tmux delivery identity.
+        raise SourceError(f"command timed out after {exc.timeout} seconds") from exc
+    except (OSError, UnicodeError) as exc:
         raise SourceError(str(exc)) from exc
     if result.returncode:
         if any(reason in result.stderr for reason in empty_errors):

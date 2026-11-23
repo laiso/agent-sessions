@@ -64,6 +64,10 @@ class TmuxDeliveryTests(unittest.TestCase):
                 def replace_server(argv):
                     if argv[1] == "set-buffer" and (argv[5] == "\n") == (phase == "enter"):
                         self.tmux("kill-server")
+                        # A killed server may still own its socket briefly.
+                        # A fresh endpoint gives the next client the replacement
+                        # server with the same %0 without racing socket teardown.
+                        self.env["TMUX_TMPDIR"] = tempfile.mkdtemp(dir=self.tmp.name)
                         self.start_server()
                     return self.run_command(argv)
 
@@ -91,4 +95,27 @@ class TmuxDeliveryTests(unittest.TestCase):
         code, reason = self.invoke(lose_reply)
         self.assertEqual(code, 6)
         self.assertIn("text delivery not confirmed", reason)
+        self.wait_for_text("-日本語\\;")
+
+    def test_hook_output_cannot_hide_refusal_and_trigger_enter(self):
+        self.tmux("set-hook", "-g", "after-set-buffer", "display-message -p notice")
+        self.tmux("select-pane", "-d", "-t", "%0")
+        submitted = []
+
+        def restore_input_after_text(argv):
+            result = self.run_command(argv)
+            if argv[1] == "set-buffer":
+                submitted.append(argv[5])
+                self.tmux("select-pane", "-e", "-t", "%0")
+            return result
+
+        code, reason = self.invoke(restore_input_after_text)
+        self.assertEqual(code, 6)
+        self.assertIn("nothing sent", reason)
+        self.assertEqual(submitted, [r"-日本語\\;"])
+        self.assertEqual(self.tmux("display-message", "-p", "-t", "%0", "#{cursor_y}:#{cursor_x}"), "0:0")
+
+    def test_hook_output_cannot_report_false_refusal(self):
+        self.tmux("set-hook", "-g", "after-set-buffer", "display-message -p pane-unavailable")
+        self.assertEqual(self.invoke(self.run_command), (0, ""))
         self.wait_for_text("-日本語\\;")
