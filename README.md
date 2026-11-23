@@ -41,7 +41,7 @@ Orca への照会は `bot list --json` と `worktree ps --json` で、各呼び�
 
 ## 実機 E2E テスト
 
-リポジトリ直下で `./run-e2e-tests.sh` を実行すると、実際の CLI を通して8つの場面を検証します。全件を実行するには、1ペイン以上ある Herdr、tmux コマンド、既知の場所の AppImage から一覧を取得できる起動中の Orca とボットが必要です。前提が足りない場面は理由付きで skip します。`E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` はひとつでも前提が足りないと失敗します。
+リポジトリ直下で `./run-e2e-tests.sh` を実行すると、実際の CLI を通して10の場面を検証します。Orca は shim がない場合と、古い shim から AppImage に切り替える場合も確認します。全件を実行するには、1ペイン以上ある Herdr、tmux コマンド、既知の場所の AppImage から一覧を取得できる起動中の Orca とボットが必要です。前提が足りない場面は理由付きで skip します。`E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` はひとつでも前提が足りないと失敗します。
 
 Herdr には一覧取得と `send --dry-run` だけを使い、Orca にはボットとワークツリーの読み取りだけを行います。実送信は一時ディレクトリで起動した隔離 tmux の `cat` ペイン宛てです。テスト終了時にそのサーバーと一時ディレクトリを片付けます。
 

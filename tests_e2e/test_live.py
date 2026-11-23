@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = "e2e-日本語"
+APPIMAGE = Path.home() / ".local/opt/orca/orca.AppImage"
 
 
 class LiveTests(unittest.TestCase):
@@ -43,7 +44,10 @@ class LiveTests(unittest.TestCase):
             self.unavailable(f"{argv[0]} unavailable: {exc}")
         if result.returncode:
             self.unavailable(f"{argv[0]} returned {result.returncode}: {result.stderr.strip()}")
-        return json.loads(result.stdout)
+        try:
+            return json.loads(result.stdout)
+        except ValueError:
+            self.unavailable(f"{argv[0]} did not return a JSON reference")
 
     def snapshot(self):
         data = self.reference("herdr", "api", "snapshot")["result"]["snapshot"]
@@ -52,7 +56,7 @@ class LiveTests(unittest.TestCase):
         return data
 
     def bots(self):
-        image = Path.home() / ".local/opt/orca/orca.AppImage"
+        image = APPIMAGE
         try:
             info = image.stat()
         except OSError:
@@ -61,9 +65,12 @@ class LiveTests(unittest.TestCase):
                 or info.st_mode & 0o022 or not os.access(image, os.X_OK)):
             self.unavailable("known Orca AppImage is not eligible for execution")
         data = self.reference(str(image), "bot", "list", "--json")
-        if data.get("ok") is not True:
+        if not isinstance(data, dict) or data.get("ok") is not True:
             self.unavailable("Orca bot list unavailable")
-        bots = data["result"]["bots"]
+        result = data.get("result")
+        bots = result.get("bots") if isinstance(result, dict) else None
+        if not isinstance(bots, list) or not all(isinstance(b, dict) and isinstance(b.get("name"), str) for b in bots):
+            self.unavailable("Orca bot list is malformed")
         if not bots:
             self.unavailable("Orca has no bots")
         return bots
@@ -103,35 +110,37 @@ class LiveTests(unittest.TestCase):
         rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
 
-    def test_E3b_orca_appimage_only(self):
-        """The reported failure: only the AppImage is installed (no shim) and it is not on PATH."""
+    def check_appimage_route(self, *, stale_shim):
         bots = self.bots()
-        empty_config = self.tmp / "config-without-shim"
-        empty_config.mkdir()
-        env = dict(self.env, PATH="/usr/bin:/bin", XDG_CONFIG_HOME=str(empty_config))
-        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
+        config = self.tmp / "config"
+        config.mkdir()
+        log = self.tmp / "launches.jsonl"
+        env = dict(self.env, PATH="/usr/bin:/bin", XDG_CONFIG_HOME=str(config),
+                   PYTHONPATH=str(ROOT / "tests_e2e/trace"), AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
+        for name in ("AGENT_SESSIONS_ORCA", "ORCA_CLI_COMMAND"):
             env.pop(name, None)
+
+        expected = []
+        if stale_shim:
+            shim = config / "orca/linux-orca-cli-shim/orca"
+            shim.parent.mkdir(parents=True)
+            shim.write_text("#!/bin/sh\nprintf 'Orca CLI is unavailable\\n' >&2\nexit 1\n")
+            shim.chmod(0o700)
+            expected.append([str(shim), "bot", "list", "--json"])
+        expected.extend([[str(APPIMAGE), "bot", "list", "--json"],
+                         [str(APPIMAGE), "worktree", "ps", "--json"]])
+
         rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        self.assertTrue(log.is_file(), "the CLI did not record any launches")
+        launches = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(launches, [[argv[0], argv] for argv in expected])
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
 
+    def test_E3b_orca_appimage_only(self):
+        self.check_appimage_route(stale_shim=False)
+
     def test_E3c_orca_stale_shim_falls_back_to_appimage(self):
-        """A shim left from a closed Orca prints 'unavailable'; the AppImage is used once instead."""
-        bots = self.bots()
-        shim_dir = self.tmp / "config-stale" / "orca" / "linux-orca-cli-shim"
-        shim_dir.mkdir(parents=True)
-        shim = shim_dir / "orca"
-        marker = self.tmp / "stale-shim-called"
-        shim.write_text('#!/bin/sh\n: > "$E2E_MARKER"\n'
-                        "printf 'Orca CLI is unavailable; reopen Orca or register the CLI again.\\n' >&2\n"
-                        "exit 1\n")
-        shim.chmod(0o700)
-        env = dict(self.env, PATH="/usr/bin:/bin", XDG_CONFIG_HOME=str(self.tmp / "config-stale"),
-                   E2E_MARKER=str(marker))
-        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
-            env.pop(name, None)
-        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
-        self.assertTrue(marker.exists(), "the shim should be tried first")
-        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
+        self.check_appimage_route(stale_shim=True)
 
     def test_E4_orca_bot_details(self):
         bots = self.bots()

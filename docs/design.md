@@ -490,3 +490,4 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 - （codex 相互レビュー v3）§11.2。shebang やソースの表記による除外を、登録済み shim・実機の IDE 用 orca.desktop の Exec で確認した AppImage 配置とのファイル同一性の照合に変更した。名前別・PATH 順に全候補を調べ、リンク経由でも一致した既知配置のパスを起動する。標準外の配置は環境変数で明示する。
 - v4 §12.2。自動検出は既知の shim・AppImage を直接調べ、所有者と書込権限はリンク先の stat で確認する。自動 shim の unavailable 診断が bot list または worktree ps に返った場合、失敗した照会だけを次の AppImage で再試行し、その後も同じ AppImage を使う。明示指定の失敗やその他の診断では切り替えない。
 - （claude レビュー v4：codex の 1700134 に対して）§12.3：E3 は、この機械では登録済みの shim で成功しており、報告された不具合（AppImage しかなく、PATH にもない）の場面を通っていなかった。そこで E3b（shim なし・AppImage だけ）と E3c（古い shim から AppImage へのやり直し）を追加した。修正前の main c2df10a では、E3、E3b、E3c の3つとも失敗することを確かめた。
+- v4 §12.3 の E3b・E3c は、ボット名の一致に加え、CLI の子プロセス起動イベントをテスト時のみ記録する。実行ファイル・引数・順序・回数を照合し、E3b は AppImage の2照会、E3c は一時 shim の bot list に続く AppImage の同じ照会1回と worktree ps 1回を要求する。参照用の直接照会はこの記録の対象外とする。
