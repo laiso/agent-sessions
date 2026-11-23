@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sessions"
+version = "0.1.0"
+description = "List Herdr and tmux agent sessions"
+requires-python = ">=3.11"
+
+[project.scripts]
+agent-sessions = "agent_sessions.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
