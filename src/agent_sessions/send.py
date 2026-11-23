@@ -13,7 +13,10 @@ def message_text(words: list[str]) -> str:
         raise ValueError("message is empty")
     if len(text) > 4096:
         raise ValueError("message exceeds 4096 characters")
-    if any(ch != "\t" and unicodedata.category(ch) in ("Cc", "Cs", "Zl", "Zp") for ch in text):
+    if "\t" in text:
+        # A tab reaches the pane as the Tab key (shell completion), not as literal text.
+        raise ValueError("message contains a tab; use spaces instead")
+    if any(unicodedata.category(ch) in ("Cc", "Cs", "Zl", "Zp") for ch in text):
         raise ValueError("message contains a control character or line break")
     return text
 

@@ -58,7 +58,9 @@ class SendTests(unittest.TestCase):
                 main(["send", "dev", msg], unexpected)
             self.assertEqual(error.exception.code, 2)
         self.assertEqual(message_text(["あ" * 4096]), "あ" * 4096)
-        self.assertEqual(message_text(["a\tb", " c "]), "a\tb  c ")
+        self.assertEqual(message_text(["a b", " c "]), "a b  c ")
+        with self.assertRaisesRegex(ValueError, "tab"):
+            message_text(["a\tb"])
 
     def test_tmux_detached_no_enter_and_json(self):
         text = "Enter; echo $HOME"

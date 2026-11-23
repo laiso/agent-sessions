@@ -37,7 +37,7 @@ class TargetTests(unittest.TestCase):
         with self.assertRaises(TargetError) as error:
             resolve("herdr:a/b", panes)
         self.assertEqual(error.exception.code, 5)
-        self.assertEqual(str(error.exception).splitlines()[1:], [f"herdr:a/b/{i}" for i in range(7)])
+        self.assertEqual(str(error.exception).splitlines()[1:], ["candidates:", *(f"  herdr:a/b/{i}" for i in range(7))])
 
     def test_conflict_between_sources(self):
         tmux = replace(self.tmux, session="a/b/one")
@@ -51,7 +51,7 @@ class TargetTests(unittest.TestCase):
         with self.assertRaises(TargetError) as error:
             resolve("herdr:a/b/MISSING", panes)
         self.assertEqual(error.exception.code, 4)
-        self.assertEqual(len(str(error.exception).splitlines()), 6)
+        self.assertEqual(len(str(error.exception).splitlines()), 7)  # reason, heading, 5 hints
         with self.assertRaises(TargetError):
             resolve("herdr:A/b/one", [self.herdr])
 
