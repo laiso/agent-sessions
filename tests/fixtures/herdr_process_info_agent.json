@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":3123089,"foreground_processes":[{"argv":["agy","--dangerously-skip-permissions"],"cmdline":"agy --dangerously-skip-permissions","cwd":"/home/kk/Work/laiso/wsh-2027-pre","name":"agy","pid":3123089}],"pane_id":"wN:pH","shell_pid":627825},"type":"pane_process_info"}}

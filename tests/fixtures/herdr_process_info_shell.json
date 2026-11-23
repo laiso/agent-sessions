@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":687031,"foreground_processes":[{"argv":["/usr/bin/bash"],"cmdline":"/usr/bin/bash","cwd":"/home/kk/Work/laiso/wsh-2027-pre","name":"bash","pid":687031}],"pane_id":"wN:pS","shell_pid":687031},"type":"pane_process_info"}}
