@@ -1,4 +1,4 @@
-# agent-sessions 設計書 v3（v1 ＋ send コマンド ＋ Orca ソース）
+# agent-sessions 設計書 v4（v1 ＋ send ＋ Orca ソース ＋ E2E テスト）
 
 作成: claude（設計・レビュー・テスト担当）／実装: codex
 
@@ -302,6 +302,8 @@ Orca のボットを、一覧のもう1つのソース `orca` として表示す
 
 どれも見つからなければ、Orca は 0 件（警告なし）。
 
+> v4（§12.2）で変更：自動検出では、PATH になくても既知の配置を直接使う。
+
 ### 11.3 読み方
 
 外部コマンドは、これまでどおり `Runner` で実行する。ただし Orca の CLI は起動に2〜3秒かかるので、Orca の呼び出しだけタイムアウトを 15 秒にする（`Runner` に timeout を渡せるようにするか、Orca 用の既定値を持たせる。テストで差し替えられること）。
@@ -372,6 +374,73 @@ Orca のボットを、一覧のもう1つのソース `orca` として表示す
 4. `AGENT_SESSIONS_ORCA=/nonexistent ORCA_CLI_COMMAND= PATH=/usr/bin:/bin ./agent-sessions --source orca` が、警告なし・0件・終了コード 0 になる
 5. Orca の CLI は読むだけにする（`bot list` と `worktree ps` 以外は呼ばない）
 6. README に Orca ソースの説明を追加
+
+## 12. E2E テストと Orca 検出の修正（v4）
+
+### 12.1 背景
+
+v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` など）に Orca があっても、それが PATH から見えないと使わなかった。そのため、実機で `--source orca` が 0 件になった。単体テストはすべて偽の Runner とフィクスチャで動いていて、実機の組み合わせを確かめるテストがなかった。設計者（claude）もレビューでこの挙動に気づいていたのに、「仕様どおり」として通してしまった。v4 では実機に対する E2E テストを要件にし、検出を直す。
+
+### 12.2 Orca CLI の見つけ方（§11.2 を置き換え）
+
+次の順で、最初に使えるものを使う。
+
+1. 環境変数 `AGENT_SESSIONS_ORCA`（空でなければ、そのパスをそのまま使う）
+2. 環境変数 `ORCA_CLI_COMMAND`（同上）
+3. 既知の配置を、**PATH に関係なく**直接調べる（この順）
+   1. 登録済みの shim：`${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca`
+   2. AppImage：`$HOME/.local/opt/orca/orca.AppImage`
+4. どれもなければ 0 件（警告なし）
+
+- PATH の探索はやめる。PATH 上の `orca` / `orca.AppImage` は、既知の配置へのシンボリックリンクでない限り、同名の別プログラム（GNOME のスクリーンリーダーなど）かもしれないので使わない。既知の配置へのリンクであれば、手順3で同じ実体がすでに見つかるので、PATH を見る必要がない。
+- 既知の配置のファイルを使う条件（偽物を実行しないため）：
+  - 絶対パスで、`stat`（リンクをたどった実体）が通常ファイルで、実行できる
+  - 実体の所有者が、実行しているユーザーか root である
+  - 実体がグループと他人から書き込めない（`mode & 0o022 == 0`）
+  - 条件を満たさなければ、その候補は飛ばして次へ進む（警告なし）
+- 呼び出すときは、見つけたパスをそのまま使う。
+- shim を AppImage より先に試す理由：shim は動いている Orca を直接呼ぶので、速い（約0.2秒。AppImage を直接呼ぶと約3.6秒）。shim が「Orca CLI is unavailable」で失敗したら（Orca を開き直したあとなど）、AppImage で1回だけやり直す。
+
+### 12.3 E2E テスト
+
+#### 置き場所と実行方法
+
+- テストは `tests_e2e/` に置く。`python3 -m unittest discover -s tests`（単体テスト）には含めない。
+- 実行方法：`./run-e2e-tests.sh`（中身は `PYTHONPATH=src python3 -m unittest discover -s tests_e2e -v`）。
+- 環境が足りない場面（Herdr が起動していないなど）は、その場面のテストを **skip** にして理由を表示する。`E2E_REQUIRE_ALL=1` を付けると、skip を失敗として扱う（実機ですべての場面を必ず確かめたいとき用）。
+- すべてのテストは、本物の `./agent-sessions` を `subprocess` で実行する（関数を直接呼ばない）。出力は基本的に `--format json` で受けて検証する。
+- 全体で 2 分以内に終わること。
+
+#### 安全上の決まり
+
+- 実在の Herdr のペインや、実在のエージェントには **何も送らない**。Herdr に対しては、一覧と `send --dry-run` だけ。
+- Orca の CLI に対しては、読むだけ（`bot list --json` と `worktree ps --json`）。
+- tmux は、テストが `TMUX_TMPDIR` に一時ディレクトリを指定して立てる隔離サーバーだけを使う。`TMUX` と `TMUX_PANE` は環境から外す。テストの最後に必ず `kill-server` し、一時ディレクトリを消す。
+- 正解の値（期待値）は、テストが本物のツールから直接取る（`herdr api snapshot`、`tmux list-sessions`、`~/.local/opt/orca/orca.AppImage bot list --json`）。フィクスチャは使わない。
+
+#### 必ず含める場面
+
+| # | 場面 | 前提（足りなければ skip） | 確かめること |
+|---|---|---|---|
+| E1 | Herdr が起動していて、実際のペインがある | `herdr api snapshot` が成功し、ペインが1つ以上ある | `--source herdr --format json` のすべての `pane_id` が、snapshot のペイン ID の集合と一致する。SESSION がワークスペースのラベルと一致する |
+| E2 | tmux が起動していて、実際のセッションがある | `tmux` コマンドがある | 隔離サーバーにセッション（例：`e2e-日本語`、ペイン2つ）を作り、`--source tmux --format json` にそのセッションと2つのペインが出る。終了コード 0 |
+| E3 | Orca が既知の場所にあるが、PATH にない | `~/.local/opt/orca/orca.AppImage` が実行でき、それで直接 `bot list --json` が成功する | `env -u ORCA_CLI_COMMAND -u AGENT_SESSIONS_ORCA PATH=/usr/bin:/bin ./agent-sessions --source orca --format json` で、ボット名の集合が AppImage の `bot list` の結果と一致する（0 件ではない） |
+| E4 | Orca が起動していて、実際のボットがいる | E3 と同じ | `--source orca --format json`（通常の環境）で、ボット名・`agent`・`paused` の対応が `bot list` と一致する。各行の `status` が §11.5 の値のどれか |
+| E5 | `--source all` で3つを同時に表示 | E1〜E4 の前提がすべてある | 隔離 tmux を立てた状態で `--format json` を実行し、`source` に `herdr`・`tmux`・`orca` の3つが、この順で現れる。表形式（`--width 200`）でも3つが出る |
+| E6 | `send --dry-run` で実際のペインを解決 | E1 と E2 の前提 | Herdr：snapshot の最初のペインを `herdr:<SESSION>/<PANE>` と `herdr:<pane_id>` で指定し、`Would send to` とその ID が出て終了コード 0（何も送られていないことは、`--dry-run` であることで保証）。tmux：隔離サーバーで `tmux:<セッション>` を解決できる |
+| E7 | 偽の orca を実行しない | なし | 一時ディレクトリに、呼ばれたら印を残す偽の `orca` を作り、PATH の先頭に置いて `--source orca` を実行する。印が残らないこと |
+| E8 | tmux への実際の送信（隔離サーバー） | `tmux` コマンドがある | 隔離サーバーの `cat` ペインに `send` で送り、`capture-pane` で本文が届いたことを確かめる |
+
+### 12.4 完了条件（v4）
+
+1. `python3 -m unittest discover -s tests` が全件成功（既存の82件を含む。検出の変更に合わせて単体テストも直す）
+2. `./run-e2e-tests.sh` がこの機械で E1〜E8 すべて成功（skip なし。`E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` で確かめる）
+3. 実機で `env -u ORCA_CLI_COMMAND PATH=/usr/bin:/bin ./agent-sessions --source orca` にボットが出る
+4. README に E2E テストの実行方法・前提・安全上の決まりを書く
+
+### 12.5 レビューの決まり（v4 から）
+
+レビュワーは、単体テストに加えて `E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` を必ず実行し、その結果を報告に書く。
 
 ## 9. 設計へのフィードバック
 
