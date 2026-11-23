@@ -92,4 +92,4 @@ The live suite requires Herdr with at least one pane, tmux, and a running Orca i
 
 Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
 
-macOS Orca discovery has been checked with platform-substituted unit tests only, and live validation on a Mac is still pending. The macOS `ps` parsing also runs in the live suite against the real process table, because Linux procps accepts the same `ps` options. The [design specification](docs/design.md) is in Japanese.
+macOS Orca discovery has been validated live on a Mac (E9 passes; the bundled CLI is found and invoked). The macOS `ps` parsing also runs in the live suite against the real process table, because Linux procps accepts the same `ps` options.
