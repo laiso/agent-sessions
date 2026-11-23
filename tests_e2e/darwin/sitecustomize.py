@@ -17,8 +17,14 @@ _log = os.environ.pop("AGENT_SESSIONS_E2E_EXEC_LOG", None)
 
 def _record(event, args):
     if event == "subprocess.Popen":
-        with open(_log, "a", encoding="utf-8") as handle:
-            print(json.dumps(args[1]), file=handle)
+        executable, argv, _, _ = args
+        record = ["launch", os.fsdecode(executable), argv]
+    elif event == "open" and isinstance(args[0], str) and args[0].startswith("/proc/"):
+        record = ["proc", args[0]]
+    else:
+        return
+    with open(_log, "a", encoding="utf-8") as handle:
+        print(json.dumps(record), file=handle)
 
 
 if _log:

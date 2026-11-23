@@ -231,35 +231,58 @@ class LiveTests(unittest.TestCase):
                 self.fail("cat did not receive and echo the submitted line")
             time.sleep(0.02)
 
+    @unittest.skipUnless(platform.system() in ("Darwin", "Linux"), "requires macOS or Linux")
     def test_E10_macos_ps_path_on_real_process_table(self):
-        """Run the macOS (ps-based) tmux process reading against a real ps and a real tmux.
-
-        On macOS this is the native path. On Linux, procps accepts the same ps options,
-        so the macOS parsing is exercised against a live process table instead of mocks.
-        """
+        ps = ["ps", "-A", "-ww", "-o", "pid=,ppid=,args="]
         if not shutil.which("ps"):
             self.unavailable("ps is not installed")
+        # Check host support separately from the CLI; never log the process table.
+        try:
+            probe = subprocess.run(ps, env=self.env, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.unavailable(f"ps unavailable: {exc}")
+        if probe.returncode:
+            self.unavailable("ps does not support the required process snapshot")
         self.start_tmux()
         sleeper = self.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", SESSION,
                             "sh", "-c", "sleep 304; :")
-        log = self.tmp / "darwin-launches.jsonl"
-        env = dict(self.env, PYTHONPATH=str(ROOT / "tests_e2e/darwin"),
-                   AGENT_SESSIONS_E2E_FAKE_DARWIN="1", AGENT_SESSIONS_E2E_EXEC_LOG=str(log))
+        pane_pid = self.tmux("display-message", "-p", "-t", sleeper, "#{pane_pid}")
+        log = self.tmp / "launches.jsonl"
+
+        def snapshot(system):
+            simulate_darwin = system == "Darwin" and platform.system() == "Linux"
+            env = dict(self.env, PYTHONPATH=str(ROOT / "tests_e2e/darwin"),
+                       AGENT_SESSIONS_E2E_EXEC_LOG=str(log),
+                       AGENT_SESSIONS_E2E_FAKE_DARWIN="1" if simulate_darwin else "0")
+            log.write_text("")  # Each CLI invocation has its own observation window.
+            rows = json.loads(self.cli("--source", "tmux", "--format", "json", env=env))
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            launches = [(e[1], e[2]) for e in events if e[0] == "launch"]
+            self.assertTrue(launches)
+            self.assertEqual((launches[0][0], launches[0][1][:2]), ("tmux", ["tmux", "list-panes"]))
+            reads = [e[1] for e in events if e[0] == "proc" and e[1].endswith(("/children", "/cmdline"))]
+            if system == "Darwin":
+                self.assertEqual(launches[1:], [("ps", ps)])
+                self.assertEqual(reads, [])
+            else:
+                self.assertEqual(launches[1:], [])
+                self.assertIn(f"/proc/{pane_pid}/task/{pane_pid}/children", reads)
+            return rows
+
         deadline = time.monotonic() + 2
         while True:
-            rows = json.loads(self.cli("--source", "tmux", "--format", "json", env=env))
+            rows = snapshot("Darwin")
             command = next(r["command"] for r in rows if r["pane_id"] == sleeper)
             if command == "sleep 304":
                 break
             if time.monotonic() >= deadline:
                 self.fail(f"ps path: expected 'sleep 304' in {sleeper}, got {command!r}")
             time.sleep(0.02)
-        launches = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertIn(["ps", "-A", "-ww", "-o", "pid=,ppid=,args="], launches,
-                      "the macOS ps path did not run")
-        native = json.loads(self.cli("--source", "tmux", "--format", "json"))
-        self.assertEqual([(r["pane_id"], r["command"], r["agent"], r["status"]) for r in rows],
-                         [(r["pane_id"], r["command"], r["agent"], r["status"]) for r in native])
+        if platform.system() == "Linux":
+            native = snapshot("Linux")
+            self.assertEqual([(r["pane_id"], r["command"], r["agent"], r["status"]) for r in rows],
+                             [(r["pane_id"], r["command"], r["agent"], r["status"]) for r in native])
 
     @unittest.skipUnless(platform.system() == "Darwin", "not macOS")
     def test_E9_macos_orca_bundle(self):
