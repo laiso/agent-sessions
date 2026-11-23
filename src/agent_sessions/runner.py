@@ -7,8 +7,8 @@ from .model import SourceError
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
-def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, timeout=5)
+def run(argv: list[str], *, timeout: int = 5) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
 def output(runner: Runner, argv: list[str], empty_errors: tuple[str, ...] = ()) -> str:

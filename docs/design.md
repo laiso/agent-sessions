@@ -17,15 +17,15 @@ Herdr と tmux で動いているエージェントのセッション（ペイ�
 ## 3. コマンドの形
 
 ```
-agent-sessions [--source {all,herdr,tmux}] [--format {table,json}]
+agent-sessions [--source {all,herdr,tmux,orca}] [--format {table,json}]
                [--agents-only] [--no-header] [--width N]
 ```
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--source` | `all` | 読むソース。`all` は herdr と tmux の両方 |
+| `--source` | `all` | 読むソース。`all` は herdr → tmux → orca の順 |
 | `--format` | `table` | `table`: 人が読む表、`json`: 機械向けの JSON 配列 |
-| `--agents-only` | オフ | エージェントが動いている行だけにする（herdr は `agent` があるペイン、tmux は §5.3 の判定で agent が付いたペイン） |
+| `--agents-only` | オフ | エージェントが動いている行だけにする（herdr は `agent` があるペイン、tmux は §5.3 の判定で agent が付いたペイン、orca は全ボット） |
 | `--no-header` | オフ | 表の見出し行を出さない |
 | `--width N` | 端末幅 | 表の全体幅。未指定なら `shutil.get_terminal_size().columns`、端末でないとき（パイプ）は切り詰めない |
 
@@ -36,7 +36,7 @@ agent-sessions [--source {all,herdr,tmux}] [--format {table,json}]
 - `3`: 指定したソースがすべて読めなかった（コマンドがない、サーバーが動いていない等）
 
 読めなかったソースは stderr に `agent-sessions: herdr: <理由>` の形で1行警告を出し、残りのソースは表示を続ける。
-ただし tmux の「サーバーが動いていない」（`no server running`）は **エラーではなく 0 件**として扱う（警告も出さない）。
+Orca の取得失敗は §11.6 の扱いに従う。tmux の「サーバーが動いていない」（`no server running`）は **エラーではなく 0 件**として扱う（警告も出さない）。
 
 ## 4. 出力形式
 
@@ -46,12 +46,12 @@ agent-sessions [--source {all,herdr,tmux}] [--format {table,json}]
 
 | 列 | 内容 |
 |---|---|
-| `SOURCE` | `herdr` / `tmux` |
-| `SESSION` | herdr: ワークスペースのラベル／tmux: セッション名 |
-| `PANE` | §5 のペイン名 |
+| `SOURCE` | `herdr` / `tmux` / `orca` |
+| `SESSION` | herdr: ワークスペースのラベル／tmux: セッション名／orca: ボット名 |
+| `PANE` | §5 のペイン名。orca は `home` |
 | `AGENT` | エージェント名（なければ `-`） |
 | `STATUS` | §6 の状態 |
-| `COMMAND` | 前面で動いているコマンドライン |
+| `COMMAND` | 前面で動いているコマンドライン。orca は専門分野 |
 | `CWD` | 作業ディレクトリ。ホーム配下は `~` に短縮 |
 
 例:
@@ -63,7 +63,7 @@ herdr   wsh-2027-pre  2       -      unknown  /usr/bin/bash                     
 tmux    dev           0.1     claude working  claude                             ~/src/app
 ```
 
-- 並び順: SOURCE（herdr → tmux）、SESSION、PANE の順（herdr はワークスペース番号・タブ番号の順、tmux はウィンドウ番号・ペイン番号の数値順）。
+- 並び順: SOURCE（herdr → tmux → orca）、SESSION、PANE の順（herdr はワークスペース番号・タブ番号の順、tmux はウィンドウ番号・ペイン番号の数値順）。
 - 0 件のとき: 見出しだけでなく、stderr ではなく stdout に `No sessions found.` を1行出す（`--format json` のときは `[]`）。
 - 幅の調整: 全体幅が `--width`（または端末幅）を超える場合、**COMMAND → CWD の順に**右端を `…` で切り詰める。各列の最小幅は 8。その他の列は切り詰めない。
 - 文字幅: 日本語など全角文字は幅2として数える（`unicodedata.east_asian_width` が `W`/`F` なら 2）。
@@ -83,7 +83,8 @@ tmux    dev           0.1     claude working  claude                            
   "status": "idle",
   "command": "agy --dangerously-skip-permissions",
   "cwd": "/home/kk/Work/laiso/wsh-2027-pre",
-  "focused": false
+  "focused": false,
+  "specialty": null
 }
 ```
 
@@ -138,16 +139,18 @@ tmux    dev           0.1     claude working  claude                            
 
 ## 6. 状態（STATUS）
 
-| 値 | herdr | tmux |
-|---|---|---|
-| `working` | `agent_status == "working"` | — |
-| `blocked` | `agent_status == "blocked"` | — |
-| `done` | `agent_status == "done"` | — |
-| `idle` | `agent_status == "idle"` | — |
-| `running` | — | AGENT がある、または COMMAND がシェル以外 |
-| `shell` | — | COMMAND がシェル（`bash`, `zsh`, `fish`, `sh`, `dash`, `nu`）だけ |
-| `dead` | — | `pane_dead == 1` |
-| `unknown` | 上記以外・値なし | — |
+| 値 | herdr | tmux | orca（優先順位は §11.5） |
+|---|---|---|---|
+| `working` | `agent_status == "working"` | — | ホームに working |
+| `blocked` | `agent_status == "blocked"` | — | ホームに blocked / waiting / permission |
+| `done` | `agent_status == "done"` | — | — |
+| `idle` | `agent_status == "idle"` | — | ホームに idle / done |
+| `running` | — | AGENT がある、または COMMAND がシェル以外 | — |
+| `shell` | — | COMMAND がシェル（`bash`, `zsh`, `fish`, `sh`, `dash`, `nu`）だけ | — |
+| `dead` | — | `pane_dead == 1` | — |
+| `unknown` | 上記以外・値なし | — | ホームが不明、または状態が未分類 |
+| `paused` | — | — | ボットが一時停止中 |
+| `stopped` | — | — | ホームの agents が空 |
 
 tmux からはエージェントの内部状態（作業中か待機中か）が取れないので、v1 では「動いているか」だけを表す。
 
@@ -395,3 +398,5 @@ Orca のボットを、一覧のもう1つのソース `orca` として表示す
 - （codex 修正レビュー）§5.3・§10.4。隔離サーバーの再起動で同じ `%0` が再利用され、本文とは別のペインに Enter が届くことを再現した。収集時のサーバー PID・起動時刻・ペインプロセス PID を内部に保持し、本文・Enter ごとに tmux 内で同一性と入力可否を照合する。入力無効時の成功表示、応答消失時の未送信の断定を修正した。後片付けは当該 UUID のバッファが既に存在しないと確認できたエラーだけを無視する。
 - （claude レビュー：codex の 9d1f246 に対して）§10.4 tmux：tmux 自身の確認（if-shell）でペインが拒否された場合は、貼り付けていないことが確実なので「nothing sent」（Enter のときは「text sent, Enter not sent」）と書く。「not confirmed」は、tmux からの応答が失われた場合など、届いたかどうか分からないときだけに使う。
 - （codex 修正レビュー）§10.4 tmux：フックの表示が stdout に混在しても誤認しないよう、各配送の UUID を含む確認行を成功・拒否の各分岐から返す。本文の成功行を確認した場合だけ Enter に進む。確認行の欠落・矛盾、非ゼロ終了、タイムアウトでは該当段階の配送は未確認とする。一時バッファの削除にも失敗した場合は、判明済みの配送結果を維持してバッファ名と削除エラーを併記する。 タイムアウトの診断には時間を出し、本文・内部識別情報を含むコマンド引数は展開しない。
+- v3 §11.6。Orca 単独では未導入・起動失敗・不正応答を警告なしの0件・終了0とする。`all` ではその Orca を成功ソースに数えず、Herdr と tmux も読めなければ従来どおり終了3。有効な `bots: []` は成功として数える。空配列の場合は状態照会を省く。
+- v3 §11.3。ボットの名前と ID が取得できる行を表示する。ホーム行の agents が欠落・不正なら unknown、明示的な空配列なら stopped とする。worktree ps は ok を省略した result 形式も受け付け、ok が明示されて true 以外ならホーム情報を使わない。

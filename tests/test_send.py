@@ -73,7 +73,7 @@ class SendTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][4:6], ["--", text])
         target = dict(source="tmux", session="dev", pane="0.3 work", pane_id="%8", agent=None,
-                      status="shell", command="bash", cwd="/tmp", focused=False)
+                      status="shell", command="bash", cwd="/tmp", focused=False, specialty=None)
         self.assertEqual(json.loads(self.out.getvalue()), dict(sent=True, dry_run=False, enter=False,
                                                                target=target, message=text))
 

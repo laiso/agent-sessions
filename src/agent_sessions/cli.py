@@ -2,9 +2,9 @@ import argparse
 import shutil
 import sys
 
-from . import herdr, send, tmux
+from . import herdr, orca, send, tmux
 from .model import Session, SourceError
-from .render import render_json, render_table
+from .render import cell, render_json, render_table
 from .runner import Runner, run
 from .target import TargetError, resolve, split_target
 
@@ -42,6 +42,9 @@ def send_main(argv: list[str], runner: Runner) -> int:
         message = send.message_text(args.message)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.target.startswith("orca:"):
+        print(f"agent-sessions: send: target not found: {cell(args.target)}", file=sys.stderr)
+        return 4
     source, _ = split_target(args.target)
     sessions, readable = collect_sessions(source, runner)
     if not readable:
@@ -63,23 +66,30 @@ def send_main(argv: list[str], runner: Runner) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None, runner: Runner = run) -> int:
+def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["send"]:
-        return send_main(argv[1:], runner)
+        return send_main(argv[1:], runner or run)
     if argv[:1] == ["list"]:
         argv = argv[1:]
-    parser = argparse.ArgumentParser(prog="agent-sessions", description="List Herdr and tmux panes.",
+    parser = argparse.ArgumentParser(prog="agent-sessions", description="List Herdr and tmux panes and Orca bots.",
                                      epilog="Use agent-sessions send --help to send a message.")
-    parser.add_argument("--source", choices=("all", "herdr", "tmux"), default="all")
+    parser.add_argument("--source", choices=("all", "herdr", "tmux", "orca"), default="all")
     parser.add_argument("--format", choices=("table", "json"), default="table")
     parser.add_argument("--agents-only", action="store_true")
     parser.add_argument("--no-header", action="store_true")
     parser.add_argument("--width", type=positive_width, metavar="N")
     args = parser.parse_args(argv)
-    sessions, readable = collect_sessions(args.source, runner)
+    sessions, readable = collect_sessions(args.source, runner or run)
+    if args.source in ("all", "orca"):
+        try:
+            sessions.extend(orca.collect(runner))
+            readable = True
+        except SourceError:
+            if args.source == "orca":
+                readable = True
     if args.agents_only:
-        sessions = [s for s in sessions if s.agent]
+        sessions = [s for s in sessions if s.agent or s.source == "orca"]
     if args.format == "json":
         print(render_json(sessions))
     else:

@@ -1,7 +1,9 @@
 import contextlib
 import io
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 from support import fixture, response
 from agent_sessions.cli import main
@@ -42,6 +44,53 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(len(out.splitlines()), 2)
         self.assertTrue(all(line.startswith("herdr") and "agy" in line for line in out.splitlines()))
+
+    @patch.dict(os.environ, {"AGENT_SESSIONS_ORCA": "/test/orca"})
+    def test_list_three_sources_and_agents_only(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv[0])
+            if argv[0] == "herdr":
+                data = fixture("herdr_snapshot") if argv[1] == "api" else {}
+            elif argv[0] == "tmux":
+                return response("\x1f".join(["dev", "0", "1", "%1", "", "codex", "invalid", "0",
+                                             "1", "1", "0", "/tmp", "1:2:3"]))
+            elif argv == ["/test/orca", "bot", "list", "--json"]:
+                data = fixture("orca_bot_list")
+                del data["result"]["bots"][0]["agent"]
+            else:
+                self.assertEqual(argv, ["/test/orca", "worktree", "ps", "--json"])
+                data = fixture("orca_worktree_ps")
+            return response(json.dumps(data))
+
+        code, out, err = self.invoke(["--source", "all", "--format", "json", "--agents-only"], runner)
+        self.assertEqual((code, err), (0, ""))
+        rows = json.loads(out)
+        self.assertEqual(list(dict.fromkeys(r["source"] for r in rows)), ["herdr", "tmux", "orca"])
+        self.assertEqual([r["session"] for r in rows if r["source"] == "orca"], ["claude", "codex", "gemini"])
+        self.assertTrue(all(r["specialty"] is None for r in rows if r["source"] != "orca"))
+        self.assertEqual(list(dict.fromkeys(calls)), ["herdr", "tmux", "/test/orca"])
+
+    @patch.dict(os.environ, {"AGENT_SESSIONS_ORCA": "/test/orca"})
+    def test_orca_empty_vs_unavailable(self):
+        for reply, all_code in ((response('{"ok":true,"result":{"bots":[]}}'), 0),
+                                (response("bad"), 3), (response(code=1), 3)):
+            def runner(argv):
+                return reply if argv[0] == "/test/orca" else response(stderr="unavailable", code=1)
+            with self.subTest(reply=reply):
+                self.assertEqual(self.invoke(["--source", "orca", "--format", "json"], runner), (0, "[]\n", ""))
+                code, out, err = self.invoke(["--format", "json"], runner)
+                self.assertEqual((code, out), (all_code, "[]\n"))
+                self.assertNotIn("orca", err)
+
+    def test_orca_send_rejected_before_collection(self):
+        result = self.invoke(["send", "orca:claude/home", "hello"], lambda argv: self.fail(str(argv)))
+        self.assertEqual(result, (4, "", "agent-sessions: send: target not found: orca:claude/home\n"))
+        def empty(argv):
+            self.assertIn(argv[0], ("herdr", "tmux"))
+            return response(code=1)
+        self.assertEqual(self.invoke(["send", "claude/home", "hello"], empty)[0], 3)
 
     def test_invalid_arguments(self):
         with self.assertRaises(SystemExit) as caught:

@@ -1,11 +1,12 @@
 # agent-sessions
 
-Herdr と tmux で開いているペインを、エージェント名・状態・前面のコマンド・作業ディレクトリとともに表示します。Python 3.11 以上で、インストールせずに使えます。
+Herdr・tmux のペインと Orca のボットを、エージェント名・状態・前面のコマンド・作業ディレクトリとともに表示します。Python 3.11 以上で、インストールせずに使えます。
 
 ```sh
 ./agent-sessions
 ./agent-sessions --source herdr --agents-only
 ./agent-sessions --source tmux --format json
+./agent-sessions --source orca
 ./agent-sessions --no-header --width 100
 ```
 
@@ -20,15 +21,19 @@ tmux    demo          0.0   -      shell    bash                                
 
 | オプション | 動作 |
 |---|---|
-| `--source all\|herdr\|tmux` | 既定は両方。指定したソースのコマンドを PATH から呼び出します。 |
+| `--source all\|herdr\|tmux\|orca` | 既定は `all`。Herdr、tmux、Orca の順に読みます。 |
 | `--format table\|json` | 既定は表。JSON 配列にはペイン ID、フォーカス状態、短縮前のパスも含みます。 |
-| `--agents-only` | エージェント名のあるペインのみ表示します。 |
+| `--agents-only` | エージェント名のあるペインと Orca の全ボットを表示します。 |
 | `--no-header` | 表の見出しを省きます。 |
 | `--width N` | 表の幅を指定します。既定は端末幅で、パイプでは全長を出力します。 |
 
 Herdr はエージェントの内部状態を表示します。tmux の `running` はプロセスの実行中を表します。Linux では tmux ペインの子プロセスの引数を読み、取得できない場合は tmux のコマンド名を表示します。
 
-終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。
+Orca の行はボットごとに1行です。SESSION はボット名、PANE は `home`、COMMAND は専門分野、CWD はホームのパスを表示します。ボットが一時停止中なら `paused`、ホームにエージェントがいなければ `stopped` です。ホームを取得できない場合もボットを表示します。JSON の `specialty` は専門分野で、未設定のボットと他のソースでは `null` です。
+
+Orca CLI は `AGENT_SESSIONS_ORCA`、`ORCA_CLI_COMMAND`、PATH の `orca`、`orca.AppImage` の順に探します。Orca の一覧には `bot list --json` と `worktree ps --json` を使い、各呼び出しを最大15秒待ちます。Orca のボットは一覧専用です。
+
+終了コードは、1ソース以上を読めた場合は `0`、引数エラーは `2`、全ソースが読めなかった場合は `3` です。tmux サーバーの不在は0件として扱います。`--source orca` 単独でボット一覧を取得できない場合も警告なしの0件・終了 `0` です。`all` では取得できなかった Orca は成功ソースに数えません。
 
 テストはリポジトリ直下で `python3 -m unittest discover -s tests` を実行してください。仕様の詳細は [設計書](docs/design.md) にあります。
 

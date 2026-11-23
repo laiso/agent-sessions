@@ -1,4 +1,4 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 
 
 class SourceError(Exception):
@@ -16,6 +16,7 @@ class Session:
     command: str | None
     cwd: str | None
     focused: bool
+    specialty: str | None = field(default=None, kw_only=True)
 
     def record(self) -> dict:
         """Public JSON fields shared by list and send."""
