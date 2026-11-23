@@ -157,11 +157,20 @@ class LiveTests(unittest.TestCase):
         expected.extend([[str(APPIMAGE), "bot", "list", "--json"],
                          [str(APPIMAGE), "worktree", "ps", "--json"]])
 
-        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
-        self.assertTrue(log.is_file(), "the CLI did not record any launches")
-        launches = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual(launches, [[argv[0], argv] for argv in expected])
-        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
+        started = time.monotonic()
+        result = self.command("./agent-sessions", "--source", "orca", "--format", "json", env=env)
+        elapsed = time.monotonic() - started
+        launches = ([json.loads(line) for line in log.read_text().splitlines()]
+                    if log.is_file() else [])
+        # Orca failures are silent by design, so a failure here must carry its own evidence.
+        diagnostics = (f"\nexit={result.returncode} elapsed={elapsed:.1f}s"
+                       f"\nstdout={result.stdout[:2000]!r}\nstderr={result.stderr[:2000]!r}"
+                       f"\nlaunches={launches!r}")
+        self.assertEqual(result.returncode, 0, diagnostics)
+        rows = json.loads(result.stdout)
+        self.assertTrue(log.is_file(), "the CLI did not record any launches" + diagnostics)
+        self.assertEqual(launches, [[argv[0], argv] for argv in expected], diagnostics)
+        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots], diagnostics)
 
     @unittest.skipUnless(platform.system() == "Linux", "not Linux")
     def test_E3b_orca_appimage_only(self):
