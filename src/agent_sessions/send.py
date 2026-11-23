@@ -21,6 +21,11 @@ def message_text(words: list[str]) -> str:
     return text
 
 
+def tmux_literal(message: str) -> str:
+    """tmux treats an argument ending in ';' as a command separator; '\\;' keeps it literal."""
+    return message[:-1] + "\\;" if message.endswith(";") else message
+
+
 def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
     pid = target.pane_id
     if target.source == "herdr":
@@ -37,7 +42,13 @@ def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None
         else:
             output(runner, [*text_cmd, message])
     else:
-        output(runner, ["tmux", "send-keys", "-t", pid, "-l", "--", message])
+        # With synchronize-panes on, send-keys reaches every pane in the window.
+        # Refuse instead of changing the user's setting.
+        synced = output(runner, ["tmux", "display-message", "-p", "-t", pid, "#{pane_synchronized}"])
+        if synced.strip() == "1":
+            raise SourceError("synchronize-panes is on for this window; "
+                              "the message would reach every pane, so nothing was sent")
+        output(runner, ["tmux", "send-keys", "-t", pid, "-l", "--", tmux_literal(message)])
         enter_cmd = ["tmux", "send-keys", "-t", pid, "Enter"]
     if enter:
         try:

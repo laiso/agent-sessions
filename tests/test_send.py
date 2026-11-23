@@ -65,7 +65,7 @@ class SendTests(unittest.TestCase):
     def test_tmux_detached_no_enter_and_json(self):
         text = "Enter; echo $HOME"
         self.assertEqual(self.invoke("--no-enter", "--format", "json", "tmux:dev", text), 0)
-        self.assertEqual(self.calls, [["tmux", "send-keys", "-t", "%8", "-l", "--", text]])
+        self.assertEqual(self.calls, [["tmux", "display-message", "-p", "-t", "%8", "#{pane_synchronized}"], ["tmux", "send-keys", "-t", "%8", "-l", "--", text]])
         target = dict(source="tmux", session="dev", pane="0.3 work", pane_id="%8", agent=None,
                       status="shell", command="bash", cwd="/tmp", focused=False)
         self.assertEqual(json.loads(self.out.getvalue()), dict(sent=True, dry_run=False, enter=False,
@@ -73,7 +73,7 @@ class SendTests(unittest.TestCase):
 
     def test_tmux_enter(self):
         self.assertEqual(self.invoke("tmux:%8", "--", "-abc"), 0)
-        self.assertEqual(self.calls, [["tmux", "send-keys", "-t", "%8", "-l", "--", "-abc"],
+        self.assertEqual(self.calls, [["tmux", "display-message", "-p", "-t", "%8", "#{pane_synchronized}"], ["tmux", "send-keys", "-t", "%8", "-l", "--", "-abc"],
                                       ["tmux", "send-keys", "-t", "%8", "Enter"]])
         self.assertIn("dev:0.3 (%8) [shell]", self.out.getvalue())
 
@@ -109,3 +109,35 @@ class SendTests(unittest.TestCase):
         self.assertEqual(self.invoke("herdr:wN:pH", "hi"), 6)
         self.assertEqual(len(self.calls), 2)
         self.assertIn("text sent, Enter failed: pane unavailable", self.err.getvalue())
+
+
+class TmuxSafetyTests(unittest.TestCase):
+    def target(self):
+        from agent_sessions.model import TmuxSession
+        return TmuxSession("tmux", "dev", "1.0", "%3", None, "shell", "bash", "/tmp", False, True)
+
+    def test_refuses_when_panes_synchronized(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            return response("1\n") if argv[1] == "display-message" else response()
+        with self.assertRaisesRegex(SourceError, "synchronize-panes"):
+            transmit(self.target(), "rm -rf x", True, runner)
+        self.assertEqual([c[1] for c in calls], ["display-message"])
+
+    def test_trailing_semicolon_escaped(self):
+        from agent_sessions.send import tmux_literal, transmit
+        self.assertEqual(tmux_literal("a;"), "a\\;")
+        self.assertEqual(tmux_literal(";"), "\\;")
+        self.assertEqual(tmux_literal("b\\;"), "b\\\\;")
+        self.assertEqual(tmux_literal("a ; b"), "a ; b")
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            return response("0\n") if argv[1] == "display-message" else response()
+        transmit(self.target(), "x;", False, runner)
+        self.assertEqual(calls[-1][-1], "x\\;")

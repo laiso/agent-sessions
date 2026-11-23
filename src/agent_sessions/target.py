@@ -68,4 +68,7 @@ def resolve(target: str, sessions: list[Session]) -> Session:
     reason = f"target not found: {label}"
     if matches:
         reason += " (dead)"
-    raise TargetError(4, reason, (matches or near)[:5])
+    # Suggest only panes that could be chosen instead: not dead, not the target itself.
+    hints = [s for s in near if s not in matches
+             and not (s.source == "tmux" and s.status == "dead")]
+    raise TargetError(4, reason, hints[:5])
