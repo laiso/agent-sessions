@@ -191,4 +191,5 @@ tests/
 - §5.3 の「最後の子」は Linux の `/proc/<pane_pid>/task/<pane_pid>/children` の末尾の PID とする。引数に空白を含むパスも扱えるよう、AGENT 判定には空白連結前の引数を使う。
 - （claude レビュー 1 回目）§5.3 PANE：bash などが自動で付ける `user@host:cwd` 形式のタイトルも、ホスト名と同じく既定のタイトルとして表示しない（実機で PANE 列が長くなり、表が読みにくくなっていたため）。
 - （claude レビュー 1 回目）§5.3 COMMAND：子プロセスがないペイン（`tmux new 'sleep 300'` のように直接起動したもの）は、ペインのプロセス自身の `/proc/<pane_pid>/cmdline` を使う。`pane_current_command` は最後の手段とする。
+- （claude レビュー 1 回目）§5.3 AGENT：引数のどこかにエージェント名があるだけでは判定しない（`vim claude` を誤判定していた）。実行ファイル名か、インタプリタ（node, npx, python など）が最初に受け取るスクリプト名だけを見る。
 - （claude レビュー 1 回目）§3 警告：外部コマンドが JSON の `{"error":{"message":...}}` を返したときは、その message だけを警告に出す（herdr サーバーが止まっているときに、JSON がそのまま出ていたため）。

@@ -68,3 +68,11 @@ class TmuxTests(unittest.TestCase):
         self.assertTrue(argv)
         self.assertEqual(read_child("not-a-pid"), [])
         self.assertEqual(read_child("999999999"), [])
+
+    def test_agent_name_only_from_executable_or_script(self):
+        row, = self.read(record(), argv=["vim", "claude"])
+        self.assertIsNone(row.agent)
+        row, = self.read(record(), argv=["npx", "-y", "codex"])
+        self.assertEqual(row.agent, "codex")
+        row, = self.read(record(), argv=["/usr/bin/gemini", "--yolo"])
+        self.assertEqual(row.agent, "gemini")

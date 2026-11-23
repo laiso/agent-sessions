@@ -13,6 +13,20 @@ SEPARATOR = "\x1f"
 AGENTS = {"claude", "codex", "gemini", "agy", "opencode", "aider", "cursor-agent",
           "copilot", "kimi", "pi"}
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "nu"}
+INTERPRETERS = {"node", "nodejs", "bun", "deno", "npx", "bunx", "python", "python3", "uv", "uvx"}
+
+
+def agent_name(names: list[str]) -> str | None:
+    """Agent from the executable, or from the script an interpreter runs (node .../claude)."""
+    if not names:
+        return None
+    if names[0] in AGENTS:
+        return names[0]
+    if names[0] in INTERPRETERS or names[0].startswith("python3."):
+        script = next((name for name in names[1:] if not name.startswith("-")), None)
+        if script in AGENTS:
+            return script
+    return None
 
 
 def read_cmdline(proc: Path) -> list[str]:
@@ -60,7 +74,7 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
             raise SourceError("invalid tmux list-panes record") from exc
         argv = proc_reader(shell_pid) or ([current] if current else [])
         names = [Path(arg).name for arg in argv]
-        agent = next((name for name in names if name in AGENTS), None)
+        agent = agent_name(names)
         status = "running"
         if dead == "1":
             status = "dead"
