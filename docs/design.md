@@ -425,6 +425,8 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 | E1 | Herdr が起動していて、実際のペインがある | `herdr api snapshot` が成功し、ペインが1つ以上ある | `--source herdr --format json` のすべての `pane_id` が、snapshot のペイン ID の集合と一致する。SESSION がワークスペースのラベルと一致する |
 | E2 | tmux が起動していて、実際のセッションがある | `tmux` コマンドがある | 隔離サーバーにセッション（例：`e2e-日本語`、ペイン2つ）を作り、`--source tmux --format json` にそのセッションと2つのペインが出る。終了コード 0 |
 | E3 | Orca が既知の場所にあるが、PATH にない | `~/.local/opt/orca/orca.AppImage` が実行でき、それで直接 `bot list --json` が成功する | `env -u ORCA_CLI_COMMAND -u AGENT_SESSIONS_ORCA PATH=/usr/bin:/bin ./agent-sessions --source orca --format json` で、ボット名の集合が AppImage の `bot list` の結果と一致する（0 件ではない） |
+| E3b | AppImage だけがあり（shim がない）、PATH にもない | E3 と同じ | `XDG_CONFIG_HOME` を空の一時ディレクトリにして shim を見えなくし、PATH を制限して `--source orca` を実行する。ボット名の集合が一致する（報告された不具合そのものの場面） |
+| E3c | shim が古くなっている（Orca を開き直した後など） | E3 と同じ | 一時的な `XDG_CONFIG_HOME` に「Orca CLI is unavailable」を出して失敗する shim を置く。shim が先に試され、AppImage でやり直してボットが出る |
 | E4 | Orca が起動していて、実際のボットがいる | E3 と同じ | `--source orca --format json`（通常の環境）で、ボット名・`agent`・`paused` の対応が `bot list` と一致する。各行の `status` が §11.5 の値のどれか |
 | E5 | `--source all` で3つを同時に表示 | E1〜E4 の前提がすべてある | 隔離 tmux を立てた状態で `--format json` を実行し、`source` に `herdr`・`tmux`・`orca` の3つが、この順で現れる。表形式（`--width 200`）でも3つが出る |
 | E6 | `send --dry-run` で実際のペインを解決 | E1 と E2 の前提 | Herdr：snapshot の最初のペインを `herdr:<SESSION>/<PANE>` と `herdr:<pane_id>` で指定し、`Would send to` とその ID が出て終了コード 0（何も送られていないことは、`--dry-run` であることで保証）。tmux：隔離サーバーで `tmux:<セッション>` を解決できる |
@@ -487,3 +489,4 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 - （claude レビュー v3：codex の 57d1f54 に対して）§11.2：PATH 上の `orca` が GNOME のスクリーンリーダー（Arch では `orca` パッケージで /usr/bin/orca に入る、同じ名前の別のプログラム）の場合は使わない。`bot list --json` で起動すると、読み上げが始まるなどの副作用がありえるため。先頭が python の shebang で、`from orca import` などを含むスクリプトは飛ばして、次の候補（`orca.AppImage`）に進む。環境変数で明示された場合は、そのまま使う。
 - （codex 相互レビュー v3）§11.2。shebang やソースの表記による除外を、登録済み shim・実機の IDE 用 orca.desktop の Exec で確認した AppImage 配置とのファイル同一性の照合に変更した。名前別・PATH 順に全候補を調べ、リンク経由でも一致した既知配置のパスを起動する。標準外の配置は環境変数で明示する。
 - v4 §12.2。自動検出は既知の shim・AppImage を直接調べ、所有者と書込権限はリンク先の stat で確認する。自動 shim の unavailable 診断が bot list または worktree ps に返った場合、失敗した照会だけを次の AppImage で再試行し、その後も同じ AppImage を使う。明示指定の失敗やその他の診断では切り替えない。
+- （claude レビュー v4：codex の 1700134 に対して）§12.3：E3 は、この機械では登録済みの shim で成功しており、報告された不具合（AppImage しかなく、PATH にもない）の場面を通っていなかった。そこで E3b（shim なし・AppImage だけ）と E3c（古い shim から AppImage へのやり直し）を追加した。修正前の main c2df10a では、E3、E3b、E3c の3つとも失敗することを確かめた。

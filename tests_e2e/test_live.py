@@ -103,6 +103,36 @@ class LiveTests(unittest.TestCase):
         rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
 
+    def test_E3b_orca_appimage_only(self):
+        """The reported failure: only the AppImage is installed (no shim) and it is not on PATH."""
+        bots = self.bots()
+        empty_config = self.tmp / "config-without-shim"
+        empty_config.mkdir()
+        env = dict(self.env, PATH="/usr/bin:/bin", XDG_CONFIG_HOME=str(empty_config))
+        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
+            env.pop(name, None)
+        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
+
+    def test_E3c_orca_stale_shim_falls_back_to_appimage(self):
+        """A shim left from a closed Orca prints 'unavailable'; the AppImage is used once instead."""
+        bots = self.bots()
+        shim_dir = self.tmp / "config-stale" / "orca" / "linux-orca-cli-shim"
+        shim_dir.mkdir(parents=True)
+        shim = shim_dir / "orca"
+        marker = self.tmp / "stale-shim-called"
+        shim.write_text('#!/bin/sh\n: > "$E2E_MARKER"\n'
+                        "printf 'Orca CLI is unavailable; reopen Orca or register the CLI again.\\n' >&2\n"
+                        "exit 1\n")
+        shim.chmod(0o700)
+        env = dict(self.env, PATH="/usr/bin:/bin", XDG_CONFIG_HOME=str(self.tmp / "config-stale"),
+                   E2E_MARKER=str(marker))
+        for name in ("ORCA_CLI_COMMAND", "AGENT_SESSIONS_ORCA"):
+            env.pop(name, None)
+        rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
+        self.assertTrue(marker.exists(), "the shim should be tried first")
+        self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
+
     def test_E4_orca_bot_details(self):
         bots = self.bots()
         rows = json.loads(self.cli("--source", "orca", "--format", "json"))
