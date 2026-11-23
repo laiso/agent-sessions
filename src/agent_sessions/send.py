@@ -48,12 +48,16 @@ def tmux_command(target: TmuxSession, data: str, buf: str) -> list[str]:
             f"paste-buffer -d -b {buf} -t {pid}", "display-message -p pane-unavailable"]
 
 
+class PaneUnavailable(SourceError):
+    """tmux checked the pane and did not paste: nothing was delivered."""
+
+
 def tmux_paste(target: TmuxSession, data: str, runner: Runner) -> None:
     buf = f"agent-sessions-{uuid.uuid4().hex}"
     argv = tmux_command(target, data, buf)
     try:
         if output(runner, argv).strip() == "pane-unavailable":
-            raise SourceError("target pane changed, exited, or has input disabled")
+            raise PaneUnavailable("target pane changed, exited, or has input disabled")
     except SourceError as exc:
         try:
             output(runner, ["tmux", "delete-buffer", "-b", buf])
@@ -70,12 +74,16 @@ def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None
             raise SourceError("missing tmux pane identity")
         try:
             tmux_paste(target, message, runner)
+        except PaneUnavailable as exc:
+            raise SourceError(f"nothing sent: {exc}") from exc
         except SourceError as exc:
             # A lost client acknowledgement can follow a successful paste.
             raise SourceError(f"text delivery not confirmed: {exc}") from exc
         if enter:
             try:
                 tmux_paste(target, "\n", runner)
+            except PaneUnavailable as exc:
+                raise SourceError(f"text sent, Enter not sent: {exc}") from exc
             except SourceError as exc:
                 raise SourceError(f"text sent, Enter delivery not confirmed: {exc}") from exc
         return

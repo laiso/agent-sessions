@@ -196,3 +196,31 @@ class TmuxSafetyTests(unittest.TestCase):
         self.assertEqual(tmux_literal("b\\;"), "b\\\\;")
         self.assertEqual(tmux_literal("a ; b"), "a ; b")
         self.assertEqual(tmux_command(self.target(), "x;", "b")[5], "x\\;")
+
+
+class DeliveryOutcomeTests(unittest.TestCase):
+    """A pane rejected by tmux's own check means nothing was pasted: say so plainly."""
+
+    def target(self):
+        from agent_sessions.model import TmuxSession
+        return TmuxSession("tmux", "dev", "1.0", "%3", None, "shell", "bash", "/tmp", False, True, "1:2:3")
+
+    def test_rejected_text_is_nothing_sent(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        runner = lambda argv: response("pane-unavailable\n") if argv[1] == "set-buffer" else response()
+        with self.assertRaisesRegex(SourceError, "^nothing sent: target pane changed"):
+            transmit(self.target(), "hi", True, runner)
+
+    def test_rejected_enter_is_enter_not_sent(self):
+        from agent_sessions.model import SourceError
+        from agent_sessions.send import transmit
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            if argv[1] == "set-buffer" and argv[5] == "\n":
+                return response("pane-unavailable\n")
+            return response()
+        with self.assertRaisesRegex(SourceError, "^text sent, Enter not sent"):
+            transmit(self.target(), "hi", True, runner)
