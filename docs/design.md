@@ -1,4 +1,4 @@
-# agent-sessions 設計書 v4（v1 ＋ send ＋ Orca ソース ＋ E2E テスト）
+# agent-sessions 設計書 v5（v1 ＋ send ＋ Orca ソース ＋ E2E テスト ＋ macOS 対応）
 
 作成: claude（設計・レビュー・テスト担当）／実装: codex
 
@@ -451,6 +451,96 @@ v3 の自動検出は、既知の配置（`~/.local/opt/orca/orca.AppImage` な�
 - 一覧表示：実際の `./agent-sessions` の出力
 - テスト：実行したコマンドと、件数・合格数が分かる出力（`Ran N tests` と `OK` / `FAILED` の行、E2E は各テストの名前と結果の行）
 - 修正の確認：修正前と修正後の、同じコマンドの出力を両方
+
+## 13. macOS 対応と英語版 README（v5）
+
+### 13.1 範囲
+
+- Orca CLI の自動検出に macOS の配置を加える。
+- tmux のペインのプロセス情報を、macOS では `ps` で読む。
+- README.md を英語版に置き換え、第三者レビュー（Carbon）の指摘 13 点を反映する。
+- Linux の動作は変えない（既存の単体テストと E2E がそのまま通ること）。
+
+### 13.2 プラットフォームの選び方
+
+- `platform.system()` の値で選ぶ。`"Darwin"` なら macOS、`"Linux"` なら Linux。それ以外（Windows など）は、Orca の自動検出は 0 件、tmux のプロセス情報は tmux のコマンド名だけ（§13.4 の最後の手段）。
+- テストで差し替えられるように、`platform.system` を引数か関数で注入できるようにする。
+
+### 13.3 Orca CLI の見つけ方（§12.2 に macOS を追加）
+
+1. `AGENT_SESSIONS_ORCA`、2. `ORCA_CLI_COMMAND`（どちらも、これまでどおり最優先でそのまま使う）
+3. 既知の配置を直接調べる（PATH は使わない）
+
+| プラットフォーム | 順番 | パス | 種類 |
+|---|---|---|---|
+| Linux | 1 | `${XDG_CONFIG_HOME:-~/.config}/orca/linux-orca-cli-shim/orca` | shim |
+| Linux | 2 | `~/.local/opt/orca/orca.AppImage` | 本体 |
+| macOS | 1 | `~/.local/bin/orca` | shim（設定 → General → Orca CLI で登録したもの） |
+| macOS | 2 | `/Applications/Orca Desktop.app/Contents/MacOS/orca` | 本体 |
+| macOS | 3 | `~/Applications/Orca Desktop.app/Contents/MacOS/orca` | 本体 |
+
+- 出典：Orca 公式ドキュメント（https://orca-desktop.com/docs/cli/）。
+- 偽物を実行しない条件（実体が通常ファイルで実行でき、所有者が自分か root、`mode & 0o022 == 0`）は、どのパスにも同じように適用する。
+- `~/.local/bin/orca` は macOS のときだけ候補にする（Linux では、同じ場所に別のプログラムがあり得るため）。
+- shim が「Orca CLI is unavailable」で失敗したときに本体で1回だけやり直す動作（§12.2）は、macOS でも同じ。やり直し先は、表の順で最初に条件を満たす本体。
+
+### 13.4 tmux のプロセス情報（§5.3 に macOS を追加）
+
+Linux はこれまでどおり `/proc/<pid>/task/<pid>/children` と `/proc/<pid>/cmdline` を使う。
+
+macOS では、収集1回につき次を1回だけ呼ぶ（ペインごとに呼ばない）。
+
+```
+ps -A -ww -o pid=,ppid=,args=
+```
+
+- `-ww` で長いコマンドラインが切られないようにする。
+- 出力から「親 PID → 子 PID の一覧」と「PID → args」の対応表を作る。
+- ペインの `pane_pid` の子のうち、PID が最大のもの（いちばん新しいもの）の args を使う。子がなければ `pane_pid` 自身の args を使う。どちらもなければ、tmux の `pane_current_command` を使う（最後の手段。Linux と同じ）。
+- `ps` が使えない、失敗する、出力が読めないときは、すべてのペインで最後の手段を使う（tmux ソース全体は失敗にしない）。
+- macOS の `ps` の args は、引数の区切りが空白でつながった1つの文字列で返る。AGENT の判定（§5.3）のために空白で分けて argv とみなす。そのため、空白を含むパスを引数に持つコマンドでは、Linux より判定が粗くなる（既知の制限として README に書く）。
+- `ps` の呼び出しも `Runner` を通す（テストで偽の出力を与えられるようにする）。
+
+### 13.5 テスト
+
+単体テスト（どの OS でも実行できること）
+- Orca：プラットフォームを `Darwin` に差し替え、一時ディレクトリを HOME にして、表の各パスの優先順位、条件を満たさない候補を飛ばすこと、Linux では `~/.local/bin/orca` を見ないこと、`Windows` では 0 件になることを確かめる。`/Applications` は実際のパスを使わず、検出関数に「ルート」を渡せるようにして一時ディレクトリで再現する。
+- tmux：プラットフォームを `Darwin` に差し替え、偽の `ps` 出力で、子の選び方（PID が最大のもの）、子がない場合、`ps` の失敗、空白で区切る argv、AGENT の判定を確かめる。
+
+E2E
+- 既存の E1〜E8 は、Linux ではそのまま通ること。
+- E2 を強くする：隔離 tmux のペインで `sleep 300` のような子プロセスを動かし、COMMAND にその引数まで出ることを確かめる（Linux では /proc、macOS では ps の経路を、実機で通す）。
+- E9（macOS のみ）：Orca の本体を既知の配置で検出して一覧が出る。macOS でなければ「not macOS」の理由で skip する。`E2E_REQUIRE_ALL=1` でも、プラットフォームが違うことによる skip は失敗にしない（その場面は、その OS でしか成り立たないため）。
+- Linux 用の E3b と E3c は、macOS では skip する（同じく、失敗にはしない）。
+
+既知の制限（報告と README に書く）
+- macOS の実機検証はできていない。依頼に書かれた Mac mini（100.84.227.27）には Orca が入っていない。また、この作業環境からは SSH の公開鍵で入れなかった（`Permission denied (publickey,password,keyboard-interactive)`）。macOS の経路は、単体テストでの再現だけで確かめる。
+
+### 13.6 README（英語版に置き換え）
+
+README.md は英語で書き直す。日本語版は残さない。次の 13 点を必ず反映する。
+
+1. `--source all` で Orca が読めないとき、Orca は「読めたソース」に数えない。Orca が読めないのに終了コード 0 になるのは `--source orca` 単独のときだけ。`all` で Herdr と tmux も読めなければ、終了コードは 3
+2. `E2E_REQUIRE_ALL=1` の Orca の前提：Orca が起動しているだけでなく、既知の配置に本体があり、ボットを1つ以上取得できること
+3. 「finished pane」ではなく「dead pane」（コードの状態名）
+4. 接頭辞なしの対象は、名前による指定だけ（`wN:pH` や `%12` のような ID は不可）。複数に一致したら、候補を stderr に出す
+5. tmux の `running` は「シェル以外の前面プロセスが動いている」（`shell`、`dead` と対比する）
+6. E2E の行から「(10 scenarios)」のような件数を外す
+7. Orca CLI の検出パス（Linux と macOS）と、環境変数（`AGENT_SESSIONS_ORCA` / `ORCA_CLI_COMMAND`）を書く。PATH は探さず、既知のパスだけを調べることも書く
+8. 冒頭の文："List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and send messages to panes."
+9. オプション表：`--source` は "Sources to read (`all` queries Herdr, tmux, then Orca)."、`--width` は "Table width (untruncated when piped)."
+10. send の節では "body" ではなく "message" と書く
+11. テストの節に、安全上の注意（実機の E2E は、既存の Herdr のペインや Orca のボットに入力を送らないこと。送信は、一時的に立てた隔離 tmux サーバーにだけ行うこと）を書く。設計書が日本語であることも書く
+12. 例に出てくる実在のワークスペース名やパス（`wsh-2027-pre`、`~/Work/laiso/...` など）を、汎用のもの（`my-app`、`~/work/my-app`）に置き換える。出力例も同様
+13. 対応プラットフォーム：Linux が主。macOS にも対応する（Orca はアプリ本体か登録済みの shim を自動検出、tmux のプロセス情報は `ps`）。§13.4 と §13.5 の macOS の制限も書く
+
+### 13.7 完了条件（v5）
+
+1. `python3 -m unittest discover -s tests` が全件成功（既存の86件を含む）
+2. `E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh` が Linux で成功（macOS 専用の場面は「not macOS」で skip になり、失敗にはならない）
+3. 修正の前と後で、Linux の `./agent-sessions --source all` と `--source orca` の出力が同じこと（Linux の動作を変えていない証跡）
+4. README.md が英語版になり、§13.6 の13点がすべて反映されている（レビュワーが1点ずつ確かめる）
+5. 報告には、§12.6 の証跡（コマンドとその出力）を必ず載せる
 
 ## 9. 設計へのフィードバック
 
