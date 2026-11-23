@@ -84,15 +84,14 @@ class OrcaTests(unittest.TestCase):
             with self.subTest(exc=exc), self.assertRaises(SourceError):
                 orca.collect(fail)
 
-    def test_valid_empty_bot_list_queries_state_only_on_macos(self):
+    def test_valid_empty_bot_list_skips_state_query_on_every_os(self):
+        """No bots means no worktree ps call, on macOS as on Linux (no platform-specific behavior)."""
         for system in ("Darwin", "Linux"):
             runner = Mock(side_effect=[response('{"ok":true,"result":{"bots":[]}}'),
                                        response('{"result":{"worktrees":[]}}')])
             with self.subTest(system=system), patch("platform.system", return_value=system):
                 self.assertEqual(orca.collect(runner), [])
                 expected = [[self.cli, "bot", "list", "--json"]]
-                if system == "Darwin":
-                    expected.append([self.cli, "worktree", "ps", "--json"])
                 self.assertEqual([call.args[0] for call in runner.call_args_list], expected)
 
     def test_no_cli(self):

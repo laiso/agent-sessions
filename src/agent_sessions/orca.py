@@ -109,7 +109,7 @@ def collect(runner: Runner | None = None) -> list[Session]:
         return records(runner, [cli, command, action, "--json"], key)
 
     bots = read("bot", "list", "bots")
-    if not bots and platform.system() != "Darwin":
+    if not bots:
         return []
     try:
         worktrees = read("worktree", "ps", "worktrees")

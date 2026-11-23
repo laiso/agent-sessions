@@ -546,7 +546,7 @@ README.md は英語で書き直す。日本語版は残さない。次の 13 点
   - `~/.local/bin/orca`（登録済みの shim）はない
 - 修正後の順番：§13.3 の表（shim → Orca.app の同梱 CLI（/Applications、~/Applications）→ 旧名 Orca Desktop.app（/Applications、~/Applications））。どれも §12.2 の安全条件をそのまま適用し、shim のあとに使う本体は、条件を満たす最初の1つだけにする（v5 と同じ）。
 - `Contents/MacOS/Orca`（大文字の O。Electron のアプリ本体）は、CLI ではないので候補に入れない。大文字と小文字を区別しないファイルシステムでは、`Contents/MacOS/orca` が `Orca` と同じファイルに当たり、アプリの画面を開いてしまうおそれがある。このため、旧名の予備として残す `Orca Desktop.app/Contents/MacOS/orca` についても、実体のファイル名が小文字の `orca` であるかを確かめる（`os.listdir` で、親ディレクトリに `orca` という名前そのものがあること）。
-- E9（macOS のみ）：本物の macOS で、見つかった CLI が `Orca.app/Contents/Resources/bin/orca` であることを、起動の記録（tests_e2e/trace と同じ方式）で確かめる。そのうえで、ボット名の集合が、その CLI を直接呼んだ `bot list --json` と一致することを確かめる。ボットが 0 件でも、「CLI が見つかって `bot list` と `worktree ps` が呼ばれたこと」を確かめれば合格とする（Mac にはまだボットがいないため）。
+- E9（macOS のみ）：本物の macOS で、見つかった CLI が `Orca.app/Contents/Resources/bin/orca` であることを、起動の記録（tests_e2e/trace と同じ方式）で確かめる。そのうえで、ボット名の集合が、その CLI を直接呼んだ `bot list --json` と一致することを確かめる。ボットが 0 件でも、「その CLI が見つかって `bot list` が呼ばれたこと」を確かめれば合格とする（Mac にはまだボットがいないため）。`worktree ps` は、ボットが1件以上あるときだけ呼ばれる（§11 の動作どおり。OS による違いは作らない）。
 - 単体テスト：偽のルートに `Orca.app/Contents/Resources/bin/orca` を置いて選ばれること、Orca.app と Orca Desktop.app の両方がある場合は Orca.app が選ばれること、`Contents/MacOS/Orca`（大文字）しかない場合は何も選ばれないこと、を確かめる。
 - README の macOS の行も、同じ順番に直す。
 - 既知の制限：claude と codex の作業環境からは、Mac mini に SSH で入れない（`Permission denied (publickey,...)`）。そのため、macOS の実機での E9 の実行は、クライアントにお願いする（コマンドは報告に書く）。
@@ -602,3 +602,4 @@ README.md は英語で書き直す。日本語版は残さない。次の 13 点
 - （codex 相互レビュー v5）§13.5 E10 は CLI の収集ごとに実行ファイル・引数・回数を照合する。Darwin 分岐では ps が1回で /proc のプロセス引数を読まず、Linux の比較用収集では対象ペインの /proc を読み ps を使わないことを確認する。macOS では OS 判定を置き換えず同じ ps の検査を行う。
 - （claude レビュー v5 の 2 回目：codex の 3e0bd23 に対して）E2E：厳格モードの全体実行13回のうち1回で、E3c が失敗した（その回は全体が 51.9 秒かかった。いつもは約 40 秒）。その後、単独で6回、全体で6回実行しても再現しなかった。AppImage の応答時間は、単独で 3.6 秒、6本を並列で走らせても最大 6.9 秒で、15 秒のタイムアウトが原因だという証拠はない。Orca の失敗は設計上、何も出力しない（§11.6）ため、原因を特定できなかった。そこで、E3b と E3c が失敗したときには、終了コード、所要時間、stdout、stderr、起動の記録をメッセージに含めるようにし、次に起きたときに原因を突き止められるようにした。不安定なテストとして、未解決の問題に記録する。
 - v5.1 §13.8。macOS は登録済み shim の次に Orca.app の Resources/bin/orca を優先する。旧名の予備は親ディレクトリに小文字の orca がある場合に限る。E9 は同梱 CLI の bot list と worktree ps の起動記録を必須とするため、Darwin では有効な空の bots 配列でも状態照会を行う。Linux は従来どおり空なら状態照会を省く。
+- （claude レビュー v5.1：codex の 189e041 に対して）§13.8：設計者（claude）の E9 の書き方（「bot list と worktree ps が呼ばれたことを確かめる」）が原因で、macOS だけ、ボットが0件でも worktree ps を呼ぶ動作が製品コードに入っていた。テストの都合で、OS ごとに動作を変えるべきではない（最大15秒の余計な呼び出しにもなる）。そこで、この分岐を取り除いた。E9 は、ボットが0件のときは bot list の1回だけを確かめ、1件以上あるときは worktree ps も確かめる。単体テストも、どの OS でも0件なら worktree ps を呼ばないことを確かめるように直した。

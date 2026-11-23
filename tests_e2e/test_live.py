@@ -310,6 +310,7 @@ class LiveTests(unittest.TestCase):
         rows = json.loads(self.cli("--source", "orca", "--format", "json", env=env))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
         expected = str(binary if binary == Path("/") / MAC_BUNDLE else home / MAC_BUNDLE)
+        # The state query runs only when there are bots (same rule on every OS).
+        queries = [("bot", "list")] + ([("worktree", "ps")] if bots else [])
         self.assertEqual([json.loads(line) for line in log.read_text().splitlines()],
-                         [[expected, [expected, *query, "--json"]]
-                          for query in (("bot", "list"), ("worktree", "ps"))])
+                         [[expected, [expected, *query, "--json"]] for query in queries])
