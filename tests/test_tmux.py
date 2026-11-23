@@ -8,14 +8,14 @@ from agent_sessions.tmux import collect, read_child
 
 def record(win="1", idx="0", title="", current="bash", dead="0", active="1", attached="2"):
     return "\x1f".join(("dev", win, idx, "%12", title, current, "123", dead, active,
-                        "1", attached, "/tmp/dev"))
+                        "1", attached, "/tmp/dev", "321:123456:123"))
 
 
 class TmuxTests(unittest.TestCase):
     def read(self, *records, argv=()):
         def runner(command):
             self.assertEqual(command[:-1], ["tmux", "list-panes", "-a", "-F"])
-            self.assertEqual(len(command[-1].split("\x1f")), 12)
+            self.assertEqual(len(command[-1].split("\x1f")), 13)
             return response("\n".join(records) + "\n")
 
         def proc_reader(pid):

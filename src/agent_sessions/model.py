@@ -25,3 +25,4 @@ class Session:
 @dataclass
 class TmuxSession(Session):
     active: bool
+    delivery_identity: str = ""

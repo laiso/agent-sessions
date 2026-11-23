@@ -1,11 +1,13 @@
 import json
+import re
 import unicodedata
 import uuid
 
-from .model import Session, SourceError
+from .model import Session, SourceError, TmuxSession
 from .render import cell
 from .runner import Runner, output
 from .target import address
+from .tmux import DELIVERY_IDENTITY
 
 
 def message_text(words: list[str]) -> str:
@@ -27,43 +29,55 @@ def tmux_literal(message: str) -> str:
     return message[:-1] + "\\;" if message.endswith(";") else message
 
 
-def tmux_command(pid: str, data: str, buf: str) -> list[str]:
+def tmux_command(target: TmuxSession, data: str, buf: str) -> list[str]:
     """One tmux invocation that pastes data into exactly one pane.
 
     paste-buffer writes to the target pane only, even when synchronize-panes is on
     (send-keys would reach every synchronized pane). Without -r, a newline in the
     buffer is pasted as CR, which is the Enter key.
     """
+    # if-shell -F evaluates in the same server that executes the paste. Only
+    # numeric identities and a generated buffer name enter the command string.
+    pid = target.pane_id
+    expected = target.delivery_identity
+    if not re.fullmatch(r"%[0-9]+", pid) or not re.fullmatch(r"[0-9]+:[0-9]+:[0-9]+", expected):
+        raise SourceError("missing or invalid tmux pane identity")
+    check = f"#{{==:{DELIVERY_IDENTITY}:#{{pane_dead}}:#{{pane_input_off}},{expected}:0:0}}"
     return ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(data),
-            ";", "paste-buffer", "-d", "-b", buf, "-t", pid]
+            ";", "if-shell", "-F", "-t", pid, check,
+            f"paste-buffer -d -b {buf} -t {pid}", "display-message -p pane-unavailable"]
 
 
-def tmux_paste(pid: str, data: str, runner: Runner) -> None:
-    buf = f"agent-sessions-{uuid.uuid4().hex}"  # unique: never touches the user's buffers
+def tmux_paste(target: TmuxSession, data: str, runner: Runner) -> None:
+    buf = f"agent-sessions-{uuid.uuid4().hex}"
+    argv = tmux_command(target, data, buf)
     try:
-        output(runner, tmux_command(pid, data, buf))
+        if output(runner, argv).strip() == "pane-unavailable":
+            raise SourceError("target pane changed, exited, or has input disabled")
     except SourceError as exc:
-        # set-buffer may have succeeded and paste-buffer failed: remove our buffer.
         try:
-            output(runner, ["tmux", "delete-buffer", "-b", buf],
-                   empty_errors=("no buffer", "unknown buffer"))
+            output(runner, ["tmux", "delete-buffer", "-b", buf])
         except SourceError as cleanup:
-            raise SourceError(f"{exc}; temporary buffer {buf} may remain ({cleanup})") from exc
+            if str(cleanup) not in (f"no buffer {buf}", f"unknown buffer: {buf}"):
+                raise SourceError(f"{exc}; temporary buffer {buf} may remain ({cleanup})") from exc
         raise
 
 
 def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
     pid = target.pane_id
     if target.source == "tmux":
+        if not isinstance(target, TmuxSession):
+            raise SourceError("missing tmux pane identity")
         try:
-            tmux_paste(pid, message, runner)
+            tmux_paste(target, message, runner)
         except SourceError as exc:
-            raise SourceError(f"nothing sent: {exc}") from exc
+            # A lost client acknowledgement can follow a successful paste.
+            raise SourceError(f"text delivery not confirmed: {exc}") from exc
         if enter:
             try:
-                tmux_paste(pid, "\n", runner)
+                tmux_paste(target, "\n", runner)
             except SourceError as exc:
-                raise SourceError(f"text sent, Enter failed: {exc}") from exc
+                raise SourceError(f"text sent, Enter delivery not confirmed: {exc}") from exc
         return
 
     text_cmd = ["herdr", "pane", "send-text", pid]

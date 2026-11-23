@@ -9,6 +9,7 @@ from .runner import Runner, output
 FIELDS = ("session_name", "window_index", "pane_index", "pane_id", "pane_title",
           "pane_current_command", "pane_pid", "pane_dead", "pane_active",
           "window_active", "session_attached", "pane_current_path")
+DELIVERY_IDENTITY = "#{pid}:#{start_time}:#{pane_pid}"
 SEPARATOR = "\x1f"
 AGENTS = {"claude", "codex", "gemini", "agy", "opencode", "aider", "cursor-agent",
           "copilot", "kimi", "pi"}
@@ -123,6 +124,7 @@ def default_title(title: str, hosts: set[str]) -> bool:
 
 def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child) -> list[Session]:
     fmt = SEPARATOR.join("#{" + name + "}" for name in FIELDS)
+    fmt += SEPARATOR + DELIVERY_IDENTITY
     raw = output(runner, ["tmux", "list-panes", "-a", "-F", fmt],
                  empty_errors=("no server running", "error connecting"))
     hosts = {socket.gethostname(), socket.gethostname().split(".")[0]}
@@ -131,7 +133,7 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         if not line:
             continue
         try:
-            session, win, idx, pid, title, current, shell_pid, dead, active, win_active, attached, cwd = line.split(SEPARATOR)
+            session, win, idx, pid, title, current, shell_pid, dead, active, win_active, attached, cwd, identity = line.split(SEPARATOR)
             key = session, int(win), int(idx)
             is_active = active == win_active == "1"
             focused = int(attached) > 0 and is_active
@@ -149,5 +151,5 @@ def collect(runner: Runner, proc_reader: Callable[[str], list[str]] = read_child
         if title and not default_title(title, hosts):
             pane += " " + title
         rows.append((key, TmuxSession("tmux", session, pane, pid, agent, status,
-                                  " ".join(argv) or None, cwd or None, focused, is_active)))
+                                  " ".join(argv) or None, cwd or None, focused, is_active, identity)))
     return [row for _, row in sorted(rows, key=lambda item: item[0])]

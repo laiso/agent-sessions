@@ -121,7 +121,7 @@ tmux    dev           0.1     claude working  claude                            
 1. 次を1回呼ぶ（区切りはタブではなく、ペイン名に含まれにくい `\x1f`（Unit Separator））:
 
    ```
-   tmux list-panes -a -F '#{session_name}\x1f#{window_index}\x1f#{pane_index}\x1f#{pane_id}\x1f#{pane_title}\x1f#{pane_current_command}\x1f#{pane_pid}\x1f#{pane_dead}\x1f#{pane_active}\x1f#{window_active}\x1f#{session_attached}\x1f#{pane_current_path}'
+   tmux list-panes -a -F '#{session_name}\x1f#{window_index}\x1f#{pane_index}\x1f#{pane_id}\x1f#{pane_title}\x1f#{pane_current_command}\x1f#{pane_pid}\x1f#{pane_dead}\x1f#{pane_active}\x1f#{window_active}\x1f#{session_attached}\x1f#{pane_current_path}\x1f#{pid}:#{start_time}:#{pane_pid}'
    ```
 
    （`-F` に渡すときは Python 側で実際の `\x1f` 文字を入れる。tmux はそのまま出力する）
@@ -228,9 +228,8 @@ agent-sessions send [--no-enter] [--dry-run] [--format {text,json}] <対象> [--
 - Herdr：
   1. `herdr pane send-text <pane_id> <メッセージ>`（メッセージが `-` で始まる場合でも誤解釈されない形にする。実装時に herdr の引数解析で確かめ、必要なら `--` を挟む）
   2. Enter を送る場合：`herdr pane send-keys <pane_id> enter`（キー名は実装時に herdr で確かめる）
-- tmux：本文を1回の tmux 呼び出しで送る（v2 レビューで変更。変更履歴を参照）
-  `set-buffer -b <一意な一時名> -- <メッセージ> ; paste-buffer -d -b <一意な一時名> -t <pane_id>`
-  Enter を送る場合は、もう1回の呼び出しで同じ形のまま改行 `"\n"` を貼り付ける（貼り付け時に CR、つまり Enter になる）。一時名は呼び出しごとに UUID で作る
+- tmux：各配送で UUID 名の一時バッファに本文を格納し、同じ tmux 呼び出し内で `if-shell -F -t <pane_id>` を使う。サーバー PID・起動時刻・ペインのプロセス PID が収集時と一致し、生存中で入力が有効なら `paste-buffer -d -b <一時名> -t <pane_id>` する。照合できなければ終了6。一時バッファの削除はその配送で生成した名前だけを対象とする。
+- Enter は別の UUID と同じ照合条件で改行を貼り付ける（CR に変換される）。本文配送の成功応答を得た後で Enter の配送を確認できなかった場合は、その段階を明示する。タイムアウトなどで応答を得られなかった配送の受信結果は不明とする。
 - 対象は必ず ID（herdr の pane_id、tmux の `%n`）で指定する。名前で指定すると、解決から送信までの間に別のペインに当たるおそれがあるため。
 - 送信コマンドが失敗したら終了コード 6。stderr に `agent-sessions: send: <理由>`（§3 と同じ JSON の error.message の扱い）。テキストは送れて Enter だけ失敗した場合も 6 とし、そのことを理由に書く。
 
@@ -302,3 +301,4 @@ Sent to herdr wsh-2027-pre/1 (wN:pH) [agy, idle]
 - （codex 相互レビュー v2 の 1 回目への対応）§10.2：見つからないときの候補からは、指定した対象そのものと dead のペインを除く。選べる候補がなければ、見出しも出さない。
 - （codex 相互レビュー v2 の 2 回目への対応）§10.4 tmux：P1 2件（同期を確かめてから送るまでの間に設定が変わる競合と、同期の状態が分からないときにも送ってしまう件）を、方式の変更でまとめて解消した。send-keys をやめ、`set-buffer` と `paste-buffer` を1回の tmux 呼び出しのコマンド列で送る。paste-buffer は synchronize-panes が on でも指定したペインにだけ届き（隔離した tmux 3.8 で、cat を2ペインで動かし同期を on にして確認）、Enter も改行の貼り付け（CR になる）で送る。そのため同期の設定に左右されず、確認の手順もいらない。前回入れた `#{pane_synchronized}` の確認はやめた。失敗したときは一時バッファを消す。
 - （codex 相互レビュー v2 の 3 回目への対応）§10.4 tmux：一時バッファの名前を呼び出しごとの UUID にした（PID だと、同じ名前のユーザーのバッファを上書き・削除し得たため）。本文と Enter を別の tmux 呼び出しに分け、失敗の理由を「nothing sent」と「text sent, Enter failed」で区別して、再送による二重入力を防ぐ。後片付けの delete-buffer に失敗したときは、バッファ名と「may remain」を理由に書く（バッファがもうない場合は何も足さない）。
+- （codex 修正レビュー）§5.3・§10.4。隔離サーバーの再起動で同じ `%0` が再利用され、本文とは別のペインに Enter が届くことを再現した。収集時のサーバー PID・起動時刻・ペインプロセス PID を内部に保持し、本文・Enter ごとに tmux 内で同一性と入力可否を照合する。入力無効時の成功表示、応答消失時の未送信の断定を修正した。後片付けは当該 UUID のバッファが既に存在しないと確認できたエラーだけを無視する。
