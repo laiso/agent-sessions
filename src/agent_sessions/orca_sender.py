@@ -96,7 +96,29 @@ def terminals(client):
     return found
 
 
+SESSION_VARIABLES = ("ORCA_AGENT_SESSION_ID", "ORCA_TERMINAL_HANDLE")
+
+
+def orca_session(env=None):
+    """True when running inside an Orca agent session or Orca terminal.
+
+    Orca then attributes orchestration commands to that caller and refuses a
+    different --from ("would act as a different caller"), so the message must be
+    sent as the calling session. Replies also come back to that session.
+    """
+    env = os.environ if env is None else env
+    return any(env.get(name) for name in SESSION_VARIABLES)
+
+
 def manage(action, runner=None, *, client=None, name=None, kind=None, subject=None, message=None):
+    if action == "send" and orca_session():
+        client = client or orca.reader(runner)
+        try:
+            client.mutate("orchestration", "send", "--to", "bot:" + name,
+                          "--type", kind, f"--subject={subject}", f"--body={message}")
+        except SourceError as exc:
+            raise SourceError(f"delivery not confirmed: {exc}") from exc
+        return None
     with locked_state() as path:
         state = load(path)
         if not state and action != "send":

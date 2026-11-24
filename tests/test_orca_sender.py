@@ -43,6 +43,10 @@ class Service:
             assert args == ["--terminal", args[1], "--tab", "--json"] and args[1] != "term_existing"
             self.rows.pop(args[1])
             result = {}
+        elif command == "send" and "--from" not in args:
+            # Inside an Orca agent session: sent as that session, no terminal involved.
+            assert args[:2] == ["--to", "bot:sample"]
+            result = {"messageId": "session"}
         elif command == "send":
             assert args[:2] == ["--to", "bot:sample"] and args[2] == "--from"
             assert args[3].startswith("term_test") and self.rows[args[3]] is False
@@ -58,6 +62,8 @@ class SenderTests(unittest.TestCase):
     def setUp(self):
         tmp = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict(os.environ, XDG_STATE_HOME=tmp, AGENT_SESSIONS_ORCA="/example/cli"))
+        for name in orca_sender.SESSION_VARIABLES:  # terminal mode unless a test opts in
+            self.enterContext(patch.dict(os.environ, {name: ""}))
         self.state = Path(tmp) / "agent-sessions/orca-sender.json"
         self.service = Service()
 
@@ -190,3 +196,27 @@ class SenderTests(unittest.TestCase):
                 case.doCleanups()
         self.assertEqual(self.service.created, 1)
         self.assertEqual(self.service.rows, {"term_existing": False})
+
+
+class SessionModeTests(SenderTests):
+    """Inside an Orca agent session Orca refuses a different --from, so send as the session."""
+
+    def test_session_send_uses_no_terminal_and_no_from(self):
+        for name in orca_sender.SESSION_VARIABLES:
+            with self.subTest(variable=name), patch.dict(os.environ, {name: "session-1"}):
+                self.service.calls.clear()
+                self.assertIn("Sent to orca sample (bot-id)", self.cli("send", "orca:sample", "hi"))
+                sends = [args for command, args in self.service.calls if command == "send"]
+                self.assertEqual(len(sends), 1)
+                self.assertNotIn("--from", sends[0])
+                self.assertIn("--type", sends[0])
+                self.assertEqual(sends[0][sends[0].index("--type") + 1], "question")
+                self.assertFalse(any(c in ("create", "close") or args == ["--json"] and c == "list" and False
+                                     for c, args in self.service.calls))
+                self.assertNotIn("create", [c for c, _ in self.service.calls])
+                self.assertFalse(self.state.exists())
+
+    def test_session_delivery_failure_is_exit_6(self):
+        with patch.dict(os.environ, {"ORCA_AGENT_SESSION_ID": "session-1"}):
+            self.service.failure = "send"
+            self.assertIn("delivery not confirmed", self.cli("send", "orca:sample", "hi", code=6))

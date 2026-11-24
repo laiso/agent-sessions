@@ -33,6 +33,9 @@ class OrcaSenderLive(unittest.TestCase):
     def setUp(self):
         state = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict(os.environ, XDG_STATE_HOME=state))
+        # These scenarios exercise the dedicated terminal, as from a plain shell.
+        for name in ("ORCA_AGENT_SESSION_ID", "ORCA_TERMINAL_HANDLE"):
+            self.enterContext(patch.dict(os.environ, {name: ""}))
         self.state = Path(state) / "agent-sessions/orca-sender.json"
         try:
             self.client = orca.reader()
