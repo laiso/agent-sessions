@@ -96,9 +96,6 @@ def terminals(client):
     return found
 
 
-SESSION_VARIABLES = ("ORCA_AGENT_SESSION_ID", "ORCA_TERMINAL_HANDLE")
-
-
 def orca_session(env=None):
     """True when running inside an Orca agent session or Orca terminal.
 
@@ -107,7 +104,10 @@ def orca_session(env=None):
     sent as the calling session. Replies also come back to that session.
     """
     env = os.environ if env is None else env
-    return any(env.get(name) for name in SESSION_VARIABLES)
+    # Older structured children have only a marker. Orca must be allowed to
+    # refuse an unidentified caller instead of receiving a substitute --from.
+    return bool(env.get("ORCA_AGENT_SESSION_ID", "").strip()
+                or env.get("ORCA_TERMINAL_HANDLE") or env.get("ORCA_STRUCTURED_SESSION"))
 
 
 def manage(action, runner=None, *, client=None, name=None, kind=None, subject=None, message=None):

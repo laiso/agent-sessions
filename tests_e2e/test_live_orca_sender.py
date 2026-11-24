@@ -33,9 +33,6 @@ class OrcaSenderLive(unittest.TestCase):
     def setUp(self):
         state = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict(os.environ, XDG_STATE_HOME=state))
-        # These scenarios exercise the dedicated terminal, as from a plain shell.
-        for name in ("ORCA_AGENT_SESSION_ID", "ORCA_TERMINAL_HANDLE"):
-            self.enterContext(patch.dict(os.environ, {name: ""}))
         self.state = Path(state) / "agent-sessions/orca-sender.json"
         try:
             self.client = orca.reader()
@@ -53,7 +50,8 @@ class OrcaSenderLive(unittest.TestCase):
         return set(orca_sender.terminals(self.client))
 
     def cleanup_terminal(self):
-        self.cli("orca-terminal", "close")
+        if self.state.exists():
+            self.cli("orca-terminal", "close")
         self.assertTrue(self.inventory() == self.before, "terminal inventory changed after close")
 
     def cli(self, *argv, runner=None, code=0):
@@ -68,9 +66,12 @@ class OrcaSenderLive(unittest.TestCase):
                 sources.append(argv[argv.index("--from") + 1])
                 return subprocess.CompletedProcess(argv, 0, '{"ok":true,"result":{"messageId":"test"}}', "")
             return run(argv, timeout=15)
-        for _ in range(2):
-            self.cli("send", "orca:" + self.bots[0]["name"], "test", runner=intercept)
-            self.assertTrue(self.inventory() == self.before | {sources[-1]})
+        # Exercise the plain-shell path only behind the delivery interceptor.
+        # The real CLI inherits the original caller identity for every operation.
+        with patch.object(orca_sender, "orca_session", return_value=False):
+            for _ in range(2):
+                self.cli("send", "orca:" + self.bots[0]["name"], "test", runner=intercept)
+                self.assertTrue(self.inventory() == self.before | {sources[-1]})
         self.assertTrue(sources[0] == sources[1] and sources[0] not in self.before)
 
     @unittest.skipUnless(os.environ.get("E2E_ORCA_SEND_TO"), "real delivery requires E2E_ORCA_SEND_TO")
@@ -80,8 +81,16 @@ class OrcaSenderLive(unittest.TestCase):
         body = "Test delivery. No action required."
         self.cli("send", "--dry-run", "--subject", subject, "orca:" + name, body)
         self.cli("send", "--subject", subject, "orca:" + name, body)
-        sender = json.loads(self.state.read_text())["handle"]
-        self.assertTrue(self.inventory() == self.before | {sender} and sender not in self.before)
+        if orca_sender.orca_session():
+            handle = os.environ.get("ORCA_TERMINAL_HANDLE", "")
+            session = os.environ.get("ORCA_AGENT_SESSION_ID", "").strip()
+            sender = ("orca_session_id:" + session
+                      if session and not handle.startswith("structworker_") else handle)
+            self.assertTrue(sender and not self.state.parent.exists())
+            self.assertTrue(self.inventory() == self.before)
+        else:
+            sender = json.loads(self.state.read_text())["handle"]
+            self.assertTrue(self.inventory() == self.before | {sender} and sender not in self.before)
         check_delivery(self, self.client, sender, name, subject, body)
 
     def test_O3_preview_and_O4_missing(self):
