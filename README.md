@@ -160,6 +160,10 @@ Message arguments are joined with one space. Put `--` before a message starting 
 | 5 | Ambiguous target |
 | 6 | Delivery failed |
 
+## Supervisor skill
+
+The [agent-sessions-supervisor skill](skills/agent-sessions-supervisor/SKILL.md) guides an agent through listing workers, reading their output, and deciding when to follow up. To install it, copy the entire `skills/agent-sessions-supervisor` directory into your agent’s skills directory, such as `~/.codex/skills/` or `~/.claude/skills/`. Run the examples from the agent-sessions checkout.
+
 ## Tests
 
 Run these commands from the repository root:
