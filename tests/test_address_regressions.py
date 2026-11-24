@@ -42,6 +42,10 @@ class AddressTests(CliCase):
         for address in ("tmux:%99", "herdr:w1:p9"):
             self.cli("send", "--dry-run", address, "hi", code=4)
 
+        self.fake.install_tmux_stub(panes=[pane(pane_dead=1)])
+        for target in ("tmux:%1", "demo", "demo:0.0"):
+            self.assertIn("dead", self.cli("send", "--dry-run", target, "hi", code=4).stderr)
+
     def test_candidate_addresses(self):
         self.herdr([str(i) for i in range(7)])
         self.fake.install_tmux_stub(panes=[pane(session_name="a/b/0")])

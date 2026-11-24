@@ -125,6 +125,15 @@ class CollectionTests(CliCase):
             ],
         )
         self.assertTrue(all(r["status"] == "shell" and not r["focused"] for r in rows))
+        self.fake.install_tmux_stub(
+            panes=[
+                pane(window_index=w, pane_index=i, pane_current_command="my-codex")
+                for w, i in [(10, 0), (2, 12), (2, 3)]
+            ]
+        )
+        rows = self.rows("--source", "tmux")
+        self.assertEqual([r["pane"] for r in rows], ["2.3", "2.12", "10.0"])
+        self.assertTrue(all(r["agent"] is None and r["status"] == "running" for r in rows))
 
     def test_pane_process_arguments(self):
         proc = self.fake.root / "proc"
@@ -167,8 +176,8 @@ pathlib.Path.__truediv__=redirected
                     pane_pid=pid,
                     pane_index=idx,
                     pane_title="作業",
-                    session_attached=1,
-                    pane_dead=int(idx == 1),
+                    session_attached=int(idx != 2),
+                    pane_dead=int(idx == 2),
                 )
             )
             task = proc / pid / "task" / pid
@@ -182,7 +191,7 @@ pathlib.Path.__truediv__=redirected
             [(" ".join(argv), agent) for argv, agent in cases],
         )
         self.assertEqual(
-            (rows[0]["pane"], rows[0]["focused"], rows[1]["status"]), ("0.0 作業", True, "dead")
+            (rows[0]["pane"], rows[0]["focused"], rows[2]["status"]), ("0.0 作業", True, "dead")
         )
 
     def test_ps_snapshot_and_fallback(self):

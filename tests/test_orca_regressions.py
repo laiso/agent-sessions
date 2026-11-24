@@ -220,6 +220,9 @@ class MailTests(CliCase):
             self.assertEqual(self.cli("--source", "orca").stderr, "")
             self.cli("--source", "all", code=3)
             self.cli("read", "orca:a", code=3)
+        self.configure(bots=[dict(name="bot", id="synthetic")], worktrees=[])
+        (row,) = self.rows("--source", "orca")
+        self.assertEqual((row["agent"], row["cwd"], row["status"]), (None, None, "unknown"))
         for bad in ("{}", "not JSON", '{"ok":false}', '{"result":{"worktrees":null}}'):
             bots = dict(
                 ok=True,

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import time
 import unittest
 
 from tests.helpers import FakeEnvironment, run_cli
@@ -52,8 +53,14 @@ sys.exit(result.returncode)
         self.server.tmux("set-window-option", "synchronize-panes", "on")
         self.send("--no-enter")
         self.send()
-        seen = self.server.tmux("capture-pane", "-p", "-t", "%0").stdout.splitlines()
-        self.assertEqual(seen.count(r"-例\;-例\;"), 2)
+        deadline = time.monotonic() + 2
+        while True:
+            seen = self.server.tmux("capture-pane", "-p", "-t", "%0").stdout.splitlines()
+            if seen.count(r"-例\;-例\;") == 2:
+                break
+            if time.monotonic() >= deadline:
+                self.fail("the target cat pane did not echo the submitted line")
+            time.sleep(0.02)
         self.assertEqual(
             self.server.tmux(
                 "display-message", "-p", "-t", other, "#{cursor_y}:#{cursor_x}"
@@ -67,11 +74,12 @@ sys.exit(result.returncode)
                 fresh.tmux("new", "-d", "-s", "replacement", "cat")
                 self.wrapper(
                     before=f"""
-if argv[0]=='set-buffer' and (argv[4]=='\\n')=={enter!r}:
+if argv[0]=='delete-buffer' or (argv[0]=='set-buffer' and (argv[4]=='\\n')=={enter!r}):
     os.environ['TMUX_TMPDIR']={fresh.tmpdir!r}
 """
                 )
                 detail = self.send(code=6)
+                self.assertEqual(fresh.tmux("list-buffers", "-F", "#{buffer_name}").stdout, "")
                 self.assertIn("target pane changed", detail)
                 self.assertIn("text sent" if enter else "nothing sent", detail)
                 self.assertEqual(
