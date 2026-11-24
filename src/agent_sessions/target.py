@@ -8,7 +8,7 @@ class TargetError(Exception):
     def __init__(self, code: int, reason: str, candidates: list[Session]):
         heading = "candidates:" if code == 5 else "did you mean:"
         lines = [reason, *([heading] if candidates else []),
-                 *(cell(f"  {s.source}:{address(s)}") for s in candidates)]
+                 *(cell(f"  {s.source}:{address(s)}  ({s.source}:{s.pane_id})") for s in candidates)]
         super().__init__("\n".join(lines))
         self.code = code
 

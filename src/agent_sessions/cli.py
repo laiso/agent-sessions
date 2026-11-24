@@ -38,13 +38,14 @@ def send_main(argv: list[str], runner: Runner) -> int:
     parser.add_argument("target")
     parser.add_argument("message", nargs="+", help="use -- before a message starting with '-'")
     args = parser.parse_args(argv)
+    if args.target.startswith("orca:"):
+        print("agent-sessions: send: orca: targets are read-only; send supports herdr: and tmux: targets",
+              file=sys.stderr)
+        return 2
     try:
         message = send.message_text(args.message)
     except ValueError as exc:
         parser.error(str(exc))
-    if args.target.startswith("orca:"):
-        print(f"agent-sessions: send: target not found: {cell(args.target)}", file=sys.stderr)
-        return 4
     source, _ = split_target(args.target)
     sessions, readable = collect_sessions(source, runner)
     if not readable:
