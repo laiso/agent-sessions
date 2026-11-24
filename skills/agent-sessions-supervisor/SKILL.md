@@ -5,7 +5,7 @@ description: Use agent-sessions to supervise workers in Herdr, tmux, or Orca whe
 
 # Supervise workers with agent-sessions
 
-Run this loop until the assigned work ends. Close the loop: when a worker stalls, nudge it and observe again. Do not stop at reporting the stall.
+Follow the requested monitoring period and scope. For an in-scope stall, carry the loop through one nudge and a fresh observation. For an observation-only assignment, report what you see.
 
 1. **List** the workers and pick the target pane ID or bot name.
 2. **Read** the target and compare with your previous read.
@@ -50,13 +50,13 @@ For an unknown status, empty read or missing target, keep the outcome unresolved
 
 ## Preview, send if authorized, then observe again
 
-Nudging a stalled worker is part of supervising it. Send only to a live Herdr or tmux pane, and keep the message short and within the assigned task (for example, ask for status or tell it to continue). Always preview first:
+For a stalled worker at a verified agent prompt in a live Herdr or tmux pane, preview one short, task-related follow-up. This example previews a submitted question.
 
 ```sh
-./agent-sessions send --dry-run --no-enter tmux:%0 'How is the build going?'
+./agent-sessions send --dry-run tmux:%0 'How is the build going?'
 ```
 
-Check that the resolved pane ID matches the pane you listed and read. Then send the same command without `--dry-run`. Without `--no-enter`, the message is submitted with Enter, which is what an agent prompt expects; at a shell prompt, Enter runs the text as a command, so use `--no-enter` there. Ask the human first only when the message would go beyond the assigned task, or the destination is uncertain. Orca bots can be read but not sent to with this CLI.
+Check the preview’s pane ID against the pane you listed and read, and verify the text and Enter behavior. For an in-scope nudge, remove only `--dry-run` and deliver it once. Default delivery presses Enter. To stage text, include `--no-enter` in both preview and delivery. Staged text remains unsubmitted. At a shell prompt Enter can execute the text as a command. If the expected worker prompt is gone, return the changed state to the human. For an Orca bot, report any needed intervention to the human because this CLI supports observation only.
 
 | Exit | Meaning and response |
 |---|---|
@@ -67,4 +67,4 @@ Check that the resolved pane ID matches the pane you listed and read. Then send 
 | 5 | Ambiguous target. Give the human the candidate addresses. |
 | 6 | Capture or delivery failed after resolution. Read the diagnostic. Delivery may be partial. Return uncertainty to the human before any retry. |
 
-After a send, read the same pane again to see whether the worker resumed or replied. If it is still stalled after one nudge, report the target and the last read to the human instead of sending again. Otherwise continue the loop until the assigned work ends or a human decision is needed.
+After a send, read the same pane again to see whether the worker resumed or replied. If it is still stalled after one nudge, report the target and relevant evidence to the human instead of sending again. Otherwise continue the loop until the assigned work ends or a human decision is needed.
