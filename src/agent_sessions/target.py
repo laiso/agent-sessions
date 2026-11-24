@@ -60,6 +60,13 @@ def resolve(target: str, sessions: list[Session], *, allow_dead: bool = False) -
         near.extend(s for s in rows if s.session in (session, value))
 
     eligible = matches if allow_dead else [s for s in matches if not (s.source == "tmux" and s.status == "dead")]
+    # One physical pane can appear under several tmux sessions (grouped sessions share
+    # windows). Rows with the same pane ID are the same pane, so they are not ambiguous;
+    # otherwise the suggested "(tmux:%ID)" form would loop back to this same error.
+    unique = {}
+    for s in eligible:
+        unique.setdefault((s.source, s.pane_id), s)
+    eligible = list(unique.values())
     label = cell(target)
     if len(eligible) > 1:
         raise TargetError(5, f"ambiguous target: {label}", eligible)

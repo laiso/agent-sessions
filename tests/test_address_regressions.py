@@ -67,3 +67,23 @@ class AddressTests(CliCase):
             check("herdr:A/b/0", 4, [])
             check("a/b/0", 5, ["candidates:", hints[0], "  tmux:a/b/0:0.0  (tmux:%1)"])
             check("tmux:a/b/0:9.0", 4, ["did you mean:", "  tmux:a/b/0:0.0  (tmux:%1)"])
+
+
+class SharedPaneTests(CliCase):
+    """Grouped tmux sessions list the same physical pane twice; its ID must still resolve."""
+
+    def test_same_pane_under_two_sessions_is_not_ambiguous(self):
+        self.fake.install_tmux_stub(panes=[pane(session_name="alpha", pane_id="%0"),
+                                           pane(session_name="beta", pane_id="%0")],
+                                    captures={"%0": (0, "SHARED-PANE\n", "")})
+        for command in ("read", "send"):
+            args = [command, "tmux:%0"] if command == "read" else [command, "--dry-run", "tmux:%0", "hi"]
+            result = self.cli(*args, code=0)
+            self.assertNotIn("ambiguous", result.stderr)
+        self.assertIn("(%0)", self.cli("send", "--dry-run", "tmux:%0", "hi", code=0).stdout)
+
+    def test_two_different_panes_stay_ambiguous(self):
+        self.fake.install_tmux_stub(panes=[pane(session_name="same", pane_id="%1", window_index=0),
+                                           pane(session_name="same", pane_id="%2", window_index=1)])
+        result = self.cli("send", "--dry-run", "same", "hi", code=5)
+        self.assertIn("(tmux:%1)", result.stderr)

@@ -153,7 +153,7 @@ Would send to herdr my-app/1 (w1:p1) [agy, idle]
 > How is the build going? ⏎
 ```
 
-Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. Use an Orca bot as a target for `read`.
+Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. A pane that appears under several grouped tmux sessions is one pane, so its ID still resolves. Use an Orca bot as a target for `read`.
 
 Send returns a delivery receipt. Choose `--format text` (the default) or `--format json`. List and read offer tables for collections. Passing `--format table` to send exits with `2`. A JSON receipt contains `sent`, `dry_run`, `enter`, `target`, and `message`. The resolved `target` is a list-format JSON object. An explicit `orca:` send target exits with `2` before querying sources. Candidate suggestions for a missing or ambiguous pane include its name and the full ID-based address.
 
