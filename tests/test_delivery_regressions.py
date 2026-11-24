@@ -4,19 +4,13 @@ from tests.helpers import LIST_SCHEMA_KEYS, sample_herdr_snapshot
 
 
 class DeliveryTests(CliCase):
-    def test_explicit_orca_before_lookup(self):
+    def test_explicit_orca_only_checks_bots(self):
         self.fake.install_tmux_stub()
         self.fake.install_herdr_stub()
         self.fake.install_orca_shim(self.fake.make_orca_script_body())
-        r = self.cli("send", "--dry-run", "orca:codex", "hi", code=2)
-        self.assertEqual(r.stdout, "")
-        self.assertEqual(
-            r.stderr,
-            "agent-sessions: send: orca: targets are read-only; send supports herdr: and tmux: targets\n",
-        )
-        self.assertEqual(
-            self.fake.tmux_calls() + self.fake.herdr_calls() + self.fake.orca_calls(), []
-        )
+        self.cli("send", "--dry-run", "orca:missing", "hi", code=4)
+        self.assertEqual(self.fake.tmux_calls() + self.fake.herdr_calls(), [])
+        self.assertEqual(self.fake.orca_calls(), [["bot", "list", "--json"]])
 
     def test_reject_before_lookup(self):
         self.fake.install_tmux_stub()

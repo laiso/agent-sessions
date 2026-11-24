@@ -155,9 +155,9 @@ class SendCommandSpecTests(unittest.TestCase):
                 run_cli(["send", "--dry-run", "w1:p1", "hi"], env=fake.env()).returncode,
                 4,
             )
-            # Orca bot is NOT a valid send target (only for read) -> non-zero (expect 2)
+            # Explicit Orca bot previews are supported.
             r_orca = run_cli(["send", "--dry-run", "orca:helper", "hi"], env=fake.env())
-            self.assertEqual(r_orca.returncode, 2, f"stderr={r_orca.stderr}")
+            self.assertEqual(r_orca.returncode, 0, f"stderr={r_orca.stderr}")
 
     def test_send_exit_3_5_6(self) -> None:
         # Exit 3: all requested sources failed

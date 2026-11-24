@@ -120,5 +120,6 @@ def result(target: Session, message: str, enter: bool, dry_run: bool, fmt: str) 
                                target=target.record(), message=message), ensure_ascii=False, indent=2)
     action = "Would send to" if dry_run else "Sent to"
     state = ", ".join(filter(None, (target.agent, target.status)))
-    heading = cell(f"{action} {target.source} {address(target)} ({target.pane_id}) [{state}]")
+    destination = target.session if target.source == "orca" else address(target)
+    heading = cell(f"{action} {target.source} {destination} ({target.pane_id}) [{state}]")
     return f"{heading}\n> {message}" + (" ⏎" if enter else "")

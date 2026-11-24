@@ -2,7 +2,7 @@ import argparse
 import shutil
 import sys
 
-from . import herdr, orca, read, send, tmux
+from . import herdr, orca, orca_sender, read, send, tmux
 from .model import Session, SourceError
 from .render import cell, render_json, render_table
 from .runner import Runner, run
@@ -30,22 +30,45 @@ def collect_sessions(source: str, runner: Runner) -> tuple[list[Session], bool]:
     return sessions, readable
 
 
-def send_main(argv: list[str], runner: Runner) -> int:
+def send_main(argv: list[str], runner: Runner | None) -> int:
     parser = argparse.ArgumentParser(prog="agent-sessions send", allow_abbrev=False)
     parser.add_argument("--no-enter", action="store_true", help="send text without Enter")
     parser.add_argument("--dry-run", action="store_true", help="resolve the target and preview the message")
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--orca-type", choices=("question", "handoff", "status"))
+    parser.add_argument("--subject", help="subject for an Orca message")
     parser.add_argument("target")
     parser.add_argument("message", nargs="+", help="use -- before a message starting with '-'")
     args = parser.parse_args(argv)
-    if args.target.startswith("orca:"):
-        print("agent-sessions: send: orca: targets are read-only; send supports herdr: and tmux: targets",
-              file=sys.stderr)
-        return 2
+    bot = args.target.startswith("orca:")
+    if not bot and (args.orca_type is not None or args.subject is not None):
+        parser.error("--orca-type and --subject require an orca: target")
     try:
         message = send.message_text(args.message)
+        subject = (send.message_text([args.subject]) if args.subject is not None
+                   else "agent-sessions: " + message[:60] + ("…" if len(message) > 60 else ""))
     except ValueError as exc:
         parser.error(str(exc))
+    if bot:
+        try:
+            client = orca.reader(runner)
+            target = orca_sender.resolve(client, args.target[5:])
+        except TargetError as exc:
+            print(f"agent-sessions: send: {exc}", file=sys.stderr)
+            return exc.code
+        except SourceError as exc:
+            print(f"agent-sessions: send: {cell(str(exc))}", file=sys.stderr)
+            return 3
+        if not args.dry_run:
+            try:
+                orca_sender.manage("send", client=client, name=target.session,
+                                   kind=args.orca_type or "question", subject=subject, message=message)
+            except (OSError, SourceError) as exc:
+                print(f"agent-sessions: send: {cell(str(exc))}", file=sys.stderr)
+                return 6
+        print(send.result(target, message, False, args.dry_run, args.format))
+        return 0
+    runner = runner or run
     source, _ = split_target(args.target)
     sessions, readable = collect_sessions(source, runner)
     if not readable:
@@ -100,11 +123,21 @@ def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
     if argv[:1] == ["read"]:
         return read_main(argv[1:], runner)
     if argv[:1] == ["send"]:
-        return send_main(argv[1:], runner or run)
+        return send_main(argv[1:], runner)
+    if argv[:1] == ["orca-terminal"]:
+        parser = argparse.ArgumentParser(prog="agent-sessions orca-terminal", allow_abbrev=False)
+        parser.add_argument("action", choices=("status", "close"))
+        args = parser.parse_args(argv[1:])
+        try:
+            print(orca_sender.manage(args.action, runner))
+        except (SourceError, OSError) as exc:
+            print(f"agent-sessions: orca-terminal: {cell(str(exc))}", file=sys.stderr)
+            return 6
+        return 0
     if argv[:1] == ["list"]:
         argv = argv[1:]
     parser = argparse.ArgumentParser(prog="agent-sessions", description="List Herdr and tmux panes and Orca bots.",
-                                     epilog="See agent-sessions read --help or agent-sessions send --help.")
+                                     epilog="See agent-sessions read --help or agent-sessions send --help; manage the sender with orca-terminal status/close.")
     parser.add_argument("--source", choices=("all", "herdr", "tmux", "orca"), default="all")
     parser.add_argument("--format", choices=("table", "json"), default="table")
     parser.add_argument("--agents-only", action="store_true")

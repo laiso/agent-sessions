@@ -87,28 +87,40 @@ def optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def reader(runner: Runner | None = None):
-    if runner is None:
-        runner = partial(run, timeout=15)
-    candidates = cli_candidates(os.environ)
-    cli = next(candidates, None)
-    if not cli:
-        raise SourceError("Orca CLI unavailable")
+class Reader:
+    """Read queries may fall back from a stale shim. Mutations run exactly once."""
 
-    def read(key: str, *args: str) -> list[dict]:
-        nonlocal cli
+    def __init__(self, runner: Runner | None = None):
+        self.runner = runner or partial(run, timeout=15)
+        self.candidates = cli_candidates(os.environ)
+        self.cli = next(self.candidates, None)
+        if not self.cli:
+            raise SourceError("Orca CLI unavailable")
+
+    def __call__(self, key: str, *args: str) -> list[dict]:
         try:
-            return records(runner, [cli, *args], key)
+            return records(self.runner, [self.cli, *args], key)
         except SourceError as exc:
             if not str(exc).startswith("Orca CLI is unavailable"):
                 raise
-            fallback = next(candidates, None)
+            fallback = next(self.candidates, None)
             if fallback is None:
                 raise
-            cli = fallback
-        return records(runner, [cli, *args], key)
+            self.cli = fallback
+        return records(self.runner, [self.cli, *args], key)
 
-    return read
+    def mutate(self, *args: str) -> dict:
+        try:
+            reply = json.loads(output(self.runner, [self.cli, *args, "--json"]))
+        except ValueError as exc:
+            raise SourceError("invalid Orca acknowledgement") from exc
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise SourceError("unsuccessful Orca acknowledgement")
+        return reply
+
+
+def reader(runner: Runner | None = None) -> Reader:
+    return Reader(runner)
 
 
 def collect(runner: Runner | None = None) -> list[Session]:
@@ -120,6 +132,10 @@ def collect(runner: Runner | None = None) -> list[Session]:
         worktrees = read("worktrees", "worktree", "ps", "--json")
     except SourceError:
         worktrees = []
+    return bot_sessions(bots, worktrees)
+
+
+def bot_sessions(bots: list[dict], worktrees: list[dict]) -> list[Session]:
     homes = {w["bot"]: w for w in worktrees
              if w.get("botHome") is True and isinstance(w.get("bot"), str)}
     sessions = []

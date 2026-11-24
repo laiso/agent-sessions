@@ -1,6 +1,6 @@
 # agent-sessions
 
-List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and read their output or send messages to panes.
+List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and read their output or send messages to panes and Orca bots.
 
 Run the launcher from the repository with Python 3.11 or later. No Python packages are required.
 
@@ -138,7 +138,7 @@ A missing tmux server is a readable source with zero panes, so a named tmux read
 
 ## Send a message
 
-Preview the target and message with `--dry-run`. By default, `send` follows the message with Enter, which can execute a command at a shell prompt. Use `--no-enter` to leave the message unsubmitted.
+Preview the target and message with `--dry-run`. For panes, `send` follows the message with Enter by default, which can execute a command at a shell prompt. Use `--no-enter` to leave the message unsubmitted.
 
 ```sh
 ./agent-sessions send --dry-run herdr:my-app/1 'How is the build going?'
@@ -153,9 +153,9 @@ Would send to herdr my-app/1 (w1:p1) [agy, idle]
 > How is the build going? ⏎
 ```
 
-Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. A pane that appears under several grouped tmux sessions is one pane, so its ID still resolves. Use an Orca bot as a target for `read`.
+Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. A pane that appears under several grouped tmux sessions is one pane, so its ID still resolves.
 
-Send returns a delivery receipt. Choose `--format text` (the default) or `--format json`. List and read offer tables for collections. Passing `--format table` to send exits with `2`. A JSON receipt contains `sent`, `dry_run`, `enter`, `target`, and `message`. The resolved `target` is a list-format JSON object. An explicit `orca:` send target exits with `2` before querying sources. Candidate suggestions for a missing or ambiguous pane include its name and the full ID-based address.
+Send returns a delivery receipt. Choose `--format text` (the default) or `--format json`. List and read offer tables for collections. Passing `--format table` to send exits with `2`. A JSON receipt contains `sent`, `dry_run`, `enter`, `target`, and `message`. The resolved `target` is a list-format JSON object. Candidate suggestions for a missing or ambiguous pane include its name and the full ID-based address.
 
 Message arguments are joined with one space. Put `--` before a message starting with a hyphen. Messages must contain non-whitespace text and may contain up to 4096 characters. Tabs, newlines and other control characters are rejected.
 
@@ -166,7 +166,13 @@ Message arguments are joined with one space. Put `--` before a message starting 
 | 3 | All requested sources failed |
 | 4 | Target missing or dead pane |
 | 5 | Ambiguous target |
-| 6 | Delivery failed |
+| 6 | Sender terminal setup or delivery failed |
+
+### Send to an Orca bot
+
+Preview the exact bot and body with `./agent-sessions send --dry-run orca:helper 'How is the build going?'`. Remove `--dry-run` to deliver one message. The default type is `question`; select `--orca-type handoff` to assign work or `--orca-type status` for an update. Set `--subject 'Build check'` to override the default subject, `agent-sessions: ` followed by the first 60 message characters and an ellipsis (…) if truncated. These two options require an explicit Orca target. Orca receipts always have `enter: false`; `--no-enter` has no effect. The target contains the bot-list metadata available at preview or send time. Read replies with `./agent-sessions read orca:helper`.
+
+The first delivery creates a dedicated Orca terminal; later deliveries reuse its saved handle after checking the terminal list. A missing or orphaned handle requires a new terminal. Dry-run checks the bot list only. Use `./agent-sessions orca-terminal status` to inspect the saved handle and `./agent-sessions orca-terminal close` to close its tab and remove its state. The private state file is `${XDG_STATE_HOME:-~/.local/state}/agent-sessions/orca-sender.json` (0600 in a 0700 directory). Keep the same state home and Orca CLI for this sender. Concurrent deliveries and close share a lock. If delivery is unconfirmed, check the mailbox before considering another send.
 
 ## Supervisor skill
 
@@ -184,6 +190,6 @@ E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh
 
 The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test checks that the bundled CLI runs `bot list --json` once. An empty list completes that check successfully. A nonempty list must be followed by one `worktree ps --json` query. The independent live suite also exercises the Linux shim and AppImage paths. The read tests require a Herdr pane with output and a `claude` bot with inbox messages. They compare the read flag for each returned message before and after the read. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
 
-Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
+With `E2E_ORCA_SEND_TO` unset the suite only previews Orca messages. The optional delivery test sends one message to the explicitly named bot, checks the inbox, and closes its dedicated terminal. Strict mode also skips this test without opt-in. Live Herdr tests read or preview; tmux delivery uses disposable panes on an isolated server.
 
 Previous live checks on macOS found and invoked the bundled Orca CLI. The macOS `ps` parsing also runs in the live suite against the real process table, because Linux procps accepts the same `ps` options.
