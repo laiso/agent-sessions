@@ -40,12 +40,9 @@ def source_matches(source: str, value: str, explicit: bool, rows: list[Session])
     if explicit:
         by_id = [s for s in rows if value == s.pane_id]
         id_shape = r"%[0-9]+" if source == "tmux" else r"w[0-9a-zA-Z]+:p[0-9a-zA-Z]+"
-        if source == "tmux" and len(by_id) > 1:
-            view = shared_tmux_view(by_id[0])
-            if view is None or any(shared_tmux_view(row) != view for row in by_id[1:]):
-                # Check before filtering dead panes: conflicting live/dead rows cannot
-                # establish that the pane shown in a preview is the delivery target.
-                raise TargetError(5, f"ambiguous target: tmux:{cell(value)}", by_id)
+        if source == "tmux" and by_id:
+            # Keep the canonical display address. resolve checks every observation
+            # of the eventual delivery ID, including for name-based lookups.
             return by_id[:1]
         if by_id or re.fullmatch(id_shape, value):
             return by_id
@@ -80,6 +77,14 @@ def resolve(target: str, sessions: list[Session], *, allow_dead: bool = False) -
     label = cell(target)
     if len(eligible) > 1:
         raise TargetError(5, f"ambiguous target: {label}", eligible)
+    candidates = eligible or matches
+    if len(candidates) == 1 and candidates[0].source == "tmux":
+        pane_id = candidates[0].pane_id
+        aliases = [s for s in sessions if s.source == "tmux" and s.pane_id == pane_id]
+        if len(aliases) > 1:
+            view = shared_tmux_view(aliases[0])
+            if view is None or any(shared_tmux_view(row) != view for row in aliases[1:]):
+                raise TargetError(5, f"ambiguous target: {label}", aliases)
     if eligible:
         return eligible[0]
     reason = f"target not found: {label}"

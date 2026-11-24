@@ -136,3 +136,17 @@ class SharedPaneTests(CliCase):
                                     captures={"%1": (0, "finished", "")})
         self.assertIn("finished", self.cli("read", "tmux:%1").stdout)
         self.assertIn("dead", self.cli("send", "--dry-run", "tmux:%1", "hi", code=4).stderr)
+
+    def test_conflicting_delivery_id_cannot_be_selected_by_name(self):
+        self.fake.install_herdr_stub(snapshot={"result": {"snapshot": {"panes": []}}})
+        for second, conflict in (("beta", {"start_time": 200}), ("alpha", {"pane_dead": 1})):
+            self.fake.install_tmux_stub(panes=[pane(session_name="alpha"),
+                                               pane(session_name=second, **conflict)])
+            start = len(self.fake.tmux_calls())
+            for target in ("alpha", "tmux:alpha", "alpha:0.0", "tmux:alpha:0.0"):
+                for args in (["read", target], ["send", "--dry-run", target, "hi"],
+                             ["send", target, "hi"]):
+                    with self.subTest(second=second, args=args):
+                        result = self.cli(*args, code=5)
+                        self.assertEqual(result.stderr.count("(tmux:%1)"), 2)
+            self.assertTrue(all(c[0] == "list-panes" for c in self.fake.tmux_calls()[start:]))
