@@ -57,14 +57,14 @@ def messages(name: str, limit: int, runner: Runner | None) -> list[dict]:
         if any(msg.get(k) is not None and not isinstance(msg[k], str) for k in ("subject", "thread_id")):
             raise SourceError("invalid Orca message metadata")
         stamp = msg["created_at"]
-        if not stamp.endswith("Z"):
-            try:
-                when = datetime.fromisoformat(stamp)
-                if when.tzinfo is None:
-                    raise ValueError
+        try:
+            when = datetime.fromisoformat(stamp)
+            if when.tzinfo is None:
+                raise ValueError
+            if not stamp.endswith("Z"):
                 stamp = when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-            except (ValueError, OverflowError) as exc:
-                raise SourceError("invalid Orca timestamp") from exc
+        except (ValueError, OverflowError) as exc:
+            raise SourceError("invalid Orca timestamp") from exc
         rows.append(record("orca", "orca:" + name, msg["type"], participant(sender),
                            msg["body"], stamp, recipient=participant(recipient),
                            message_id=msg["id"], subject=msg.get("subject"),
@@ -102,9 +102,14 @@ _ESCAPE = re.compile(
     r"|\x1b[ -/]*[0-~]", re.DOTALL)
 
 
+# Unicode Bidi_Control characters can change the visual order of adjacent text.
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
+                           "\u2066\u2067\u2068\u2069")
+
+
 def clean(text: str) -> str:
     return "".join(c for c in _ESCAPE.sub("", text)
-                   if c in "\n\t" or unicodedata.category(c) != "Cc")
+                   if c in "\n\t" or (unicodedata.category(c) != "Cc" and c not in _BIDI_CONTROLS))
 
 
 def render(records: list[dict], fmt: str) -> str:

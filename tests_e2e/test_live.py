@@ -31,8 +31,8 @@ class LiveTests(unittest.TestCase):
             self.fail(reason)
         self.skipTest(reason)
 
-    def command(self, *argv, env=None, timeout=35):
-        return subprocess.run(argv, cwd=ROOT, env=self.env if env is None else env, text=True,
+    def command(self, *argv, env=None, timeout=35, text=True):
+        return subprocess.run(argv, cwd=ROOT, env=self.env if env is None else env, text=text,
                               capture_output=True, timeout=timeout)
 
     def cli(self, *args, env=None):
@@ -176,9 +176,9 @@ class LiveTests(unittest.TestCase):
         for pane in self.snapshot()["panes"]:
             pid = pane["pane_id"]
             direct = self.command("herdr", "pane", "read", pid, "--source", "recent",
-                                  "--lines", "50", "--format", "text")
+                                  "--lines", "50", "--format", "text", text=False)
             self.assertEqual(direct.returncode, 0, direct.stderr)
-            last = direct.stdout.rstrip("\n").split("\n")[-1]
+            last = direct.stdout.rstrip(b"\n").split(b"\n")[-1].decode("utf-8", errors="replace")
             if not last:
                 continue
             rows = json.loads(self.cli("read", "--format", "json", "herdr:" + pid))

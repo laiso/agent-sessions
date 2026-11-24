@@ -62,7 +62,8 @@ Herdr and tmux. An Orca bot requires the explicit `orca:` prefix.
 
 The default table displays a timestamp, message type, participants, optional ID and subject,
 and indented body. It strips terminal escapes and control characters from the body except
-newlines and tabs. JSON preserves the original text. The limit ranges from 1 to 1000.
+newlines and tabs. It also removes bidirectional text controls. JSON retains these characters.
+Invalid UTF-8 bytes in terminal captures are decoded with the Unicode replacement character (�). The limit ranges from 1 to 1000.
 For terminals it counts lines (default 50) after trailing empty lines are removed.
 Each capture produces one record, even for an empty pane. For Orca it counts messages
 (default 20), returning the most recent matches in chronological order.
@@ -70,7 +71,7 @@ Each capture produces one record, even for an empty pane. For Orca it counts mes
 All sources use the same JSON fields. Use `structured` (or `type`) to tell the two kinds apart:
 
 - `structured: true` — an Orca message. `type` is Orca's message type (`handoff`, `question`,
-  `status`, `escalation`, `worker_done`, …) and `from`, `to` and `subject` are set.
+  `status`, `escalation`, `worker_done`, …) and `from`, `to` and `subject` can be null.
 - `structured: false` — raw terminal text from Herdr or tmux. `type` is always
   `terminal-output`, `body` is the captured text as-is, and `id`, `to`, `subject` and
   `thread_id` are null. Interpret it yourself; it carries no message semantics.

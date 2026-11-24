@@ -117,6 +117,19 @@ class ReadTests(unittest.TestCase):
         self.assertEqual(self.invoke("orca:a")[:2], (0, "No messages.\n"))
         self.assertEqual(self.records("orca:a"), [])
 
+    def test_table_removes_direction_controls_but_json_preserves_them(self):
+        self.capture = "本文 \u2067abc\u2069 \u202edef\u202c 👩\u200d💻"
+        self.assertEqual(self.records("tmux:%2")[0]["body"], self.capture)
+        code, out, _ = self.invoke("tmux:%2")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[-1], "   本文 abc def 👩\u200d💻")
+
+    def test_invalid_z_timestamp_is_a_source_error(self):
+        self.inbox[1]["created_at"] = "invalidZ"
+        code, out, err = self.invoke("orca:a")
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("invalid Orca timestamp", err)
+
     def test_resolution_and_errors(self):
         code, _, err = self.invoke("orca:absent")
         self.assertEqual(code, 4)
