@@ -5,7 +5,7 @@ import subprocess
 import unicodedata
 from datetime import datetime, timezone
 
-from . import orca
+from . import orca, tmux
 from .model import Session, SourceError
 from .render import cell
 from .runner import Runner, output
@@ -28,20 +28,9 @@ def messages(name: str, limit: int, runner: Runner | None) -> list[dict]:
         if names:
             reason += "\ndid you mean:\n" + "\n".join(f"  orca:{cell(n)}" for n in names)
         raise TargetError(4, reason, [])
-    owners = {}
-    for bot in names:
-        for chat in query("chats", "bot", "chats", "--bot", bot, "--all", "--json"):
-            if orca.optional_text(chat.get("id")):
-                owners["orca_session_id:" + chat["id"]] = bot
+    owners = orca.chat_owners(query, names)
     inbox = query("messages", "orchestration", "inbox", "--json", "--full", "--limit", "1000")
-    runs = {}
-    for msg in inbox:
-        sender = orca.optional_text(msg.get("from_handle"))
-        recipient = orca.optional_text(msg.get("to_handle"))
-        run_id = orca.optional_text(msg.get("run_id"))
-        if sender in owners and recipient and recipient.startswith("dispatch:") and run_id:
-            runs["run:" + run_id] = owners[sender]
-    owners.update(runs)
+    owners.update(orca.run_owners(owners, inbox))
 
     def participant(handle):
         return "bot:" + owners[handle] if handle in owners else handle
@@ -82,14 +71,29 @@ def capture(argv: list[str]) -> subprocess.CompletedProcess[str]:
                                        result.stderr.decode(errors="replace"))
 
 
-def terminal(session: Session, limit: int, runner: Runner | None) -> dict:
+def terminal_text(session: Session, limit: int, runner: Runner | None, *, visible=False) -> str:
     if session.source == "herdr":
-        argv = ["herdr", "pane", "read", session.pane_id, "--source", "recent",
+        argv = ["herdr", "pane", "read", session.pane_id, "--source", "visible" if visible else "recent",
                 "--lines", str(limit), "--format", "text"]
     else:
-        argv = ["tmux", "capture-pane", "-p", "-J", "-t", session.pane_id, "-S", f"-{limit}"]
-    lines = output(runner or capture, argv).rstrip("\n").split("\n")
-    body = "\n".join(lines[-limit:])
+        expected = tmux.validated_identity(session)
+        dead = int(session.status == "dead")
+        check = f"#{{==:{tmux.DELIVERY_IDENTITY}:#{{pane_dead}},{expected}:{dead}}}"
+        pid = session.pane_id
+        start = "" if visible else f" -S -{limit}"
+        argv = ["tmux", "if-shell", "-F", "-t", pid, check,
+                f"display-message -p capture ; capture-pane -p -J -t {pid}{start}"]
+    raw = output(runner or capture, argv)
+    if session.source == "tmux":
+        marker, newline, raw = raw.partition("\n")
+        if marker != "capture" or not newline:
+            raise SourceError("tmux pane identity changed or capture was not confirmed")
+    lines = raw.rstrip("\n").split("\n")
+    return "\n".join(lines[-limit:])
+
+
+def terminal(session: Session, limit: int, runner: Runner | None) -> dict:
+    body = terminal_text(session, limit, runner)
     target = f"{session.source}:{address(session)}"
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     return record(session.source, target, "terminal-output", target, body, stamp)

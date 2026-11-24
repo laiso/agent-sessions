@@ -87,6 +87,26 @@ def optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def chat_owners(query, names):
+    owners = {}
+    for bot in names:
+        for chat in query("chats", "bot", "chats", "--bot", bot, "--all", "--json"):
+            if optional_text(chat.get("id")):
+                owners["orca_session_id:" + chat["id"]] = bot
+    return owners
+
+
+def run_owners(owners, inbox):
+    runs = {}
+    for msg in inbox:
+        sender = optional_text(msg.get("from_handle"))
+        recipient = optional_text(msg.get("to_handle"))
+        run_id = optional_text(msg.get("run_id"))
+        if sender in owners and recipient and recipient.startswith("dispatch:") and run_id:
+            runs["run:" + run_id] = owners[sender]
+    return runs
+
+
 class Reader:
     """Read queries may fall back from a stale shim. Mutations run exactly once."""
 
@@ -107,6 +127,10 @@ class Reader:
             if fallback is None:
                 raise
             self.cli = fallback
+        return records(self.runner, [self.cli, *args], key)
+
+    def pinned(self, key: str, *args: str) -> list[dict]:
+        """Read from the instance that acknowledged a mutation."""
         return records(self.runner, [self.cli, *args], key)
 
     def mutate(self, *args: str) -> dict:

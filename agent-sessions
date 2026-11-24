@@ -1,3 +1,12 @@
 #!/bin/sh
-root=$(dirname "$(realpath "$0")")
-PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m agent_sessions "$@"
+unset PYTHONPATH
+exec python3 -I -c '
+import sys
+from pathlib import Path
+
+del sys.argv[0]
+sys.path.insert(0, str(Path(sys.argv[0]).resolve().parent / "src"))
+from agent_sessions.cli import main
+
+raise SystemExit(main())
+' "$0" "$@"

@@ -65,6 +65,10 @@ class OrcaSenderLive(unittest.TestCase):
             if argv[1:3] == ["orchestration", "send"]:
                 sources.append(argv[argv.index("--from") + 1])
                 return subprocess.CompletedProcess(argv, 0, '{"ok":true,"result":{"messageId":"test"}}', "")
+            if argv[1:3] == ["orchestration", "inbox"]:
+                row = dict(id="test", from_handle=sources[-1], to_handle="bot:" + self.bots[0]["name"],
+                           subject="agent-sessions: test", body="test")
+                return subprocess.CompletedProcess(argv, 0, json.dumps(dict(ok=True, result={"messages": [row]})), "")
             return run(argv, timeout=15)
         # Exercise the plain-shell path only behind the delivery interceptor.
         # The real CLI inherits the original caller identity for every operation.

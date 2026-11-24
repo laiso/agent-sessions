@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import orca
+from . import observe, orca
 from .model import SourceError
 from .render import cell
 from .target import TargetError
@@ -110,14 +110,62 @@ def orca_session(env=None):
                 or env.get("ORCA_TERMINAL_HANDLE") or env.get("ORCA_STRUCTURED_SESSION"))
 
 
+def inbox_receipt(query, name, message_id, subject, message, sender, resolved=None):
+    rows = query("messages", "orchestration", "inbox", "--json", "--full", "--limit", "1000")
+    matches = [row for row in rows if row.get("id") == message_id]
+    if len(matches) != 1:
+        return False
+    row = matches[0]
+    if (row.get("body") != message or row.get("subject") != subject
+            or (sender and row.get("from_handle") != sender)):
+        return False
+    recipient = orca.optional_text(row.get("to_handle"))
+    if resolved and recipient != resolved:
+        return False
+    if recipient == "bot:" + name:
+        return True
+    if not recipient or not recipient.startswith(("orca_session_id:", "run:")):
+        return False
+    # Full receipts bind this bot send to the resolved chat or run, including
+    # runs whose original dispatch has aged out of the inbox window.
+    if resolved:
+        return True
+    owners = orca.chat_owners(query, [name])
+    owners.update(orca.run_owners(owners, rows))
+    return owners.get(recipient) == name
+
+
+def deliver(client, name, kind, subject, message, sender=None):
+    recipient = "bot:" + name
+    origin = ["--from", sender] if sender else []
+    try:
+        reply = client.mutate("orchestration", "send", "--to", recipient, *origin,
+                              "--type", kind, f"--subject={subject}", f"--body={message}", "--full")
+        result = reply.get("result")
+        if not isinstance(result, dict):
+            raise SourceError("missing send receipt")
+        record = result.get("message")
+        if isinstance(record, dict):
+            message_id = record.get("id")
+            resolved = orca.optional_text(record.get("to_handle"))
+        else:
+            # Older CLIs and relay receipts may supply only the message ID.
+            relay = result.get("relay")
+            message_id = (relay if isinstance(relay, dict) else result).get("messageId")
+            resolved = None
+        if not orca.optional_text(message_id):
+            raise SourceError("missing message ID")
+
+        if not observe.observed(lambda: inbox_receipt(client.pinned, name, message_id, subject, message, sender, resolved)):
+            raise SourceError("message missing from recipient inbox")
+    except SourceError as exc:
+        raise SourceError(f"delivery not confirmed: {exc}") from exc
+
+
 def manage(action, runner=None, *, client=None, name=None, kind=None, subject=None, message=None):
     if action == "send" and orca_session():
         client = client or orca.reader(runner)
-        try:
-            client.mutate("orchestration", "send", "--to", "bot:" + name,
-                          "--type", kind, f"--subject={subject}", f"--body={message}")
-        except SourceError as exc:
-            raise SourceError(f"delivery not confirmed: {exc}") from exc
+        deliver(client, name, kind, subject, message)
         return None
     with locked_state() as path:
         state = load(path)
@@ -155,12 +203,8 @@ def manage(action, runner=None, *, client=None, name=None, kind=None, subject=No
             except OSError as exc:
                 raise SourceError(f"could not save newly created terminal {handle}: {exc}") from exc
             # Keep all subsequent operations bound to the instance used to create it.
-            fresh = orca.records(client.runner, [client.cli, "terminal", "list", "--json"], "terminals")
+            fresh = client.pinned("terminals", "terminal", "list", "--json")
             matches = [r for r in fresh if r.get("handle") == handle]
             if len(matches) != 1 or matches[0].get("orphaned") is not False:
                 raise SourceError("created sender terminal missing or orphaned")
-        try:
-            client.mutate("orchestration", "send", "--to", "bot:" + name, "--from", handle,
-                          "--type", kind, f"--subject={subject}", f"--body={message}")
-        except SourceError as exc:
-            raise SourceError(f"delivery not confirmed: {exc}") from exc
+        deliver(client, name, kind, subject, message, handle)

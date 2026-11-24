@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from collections.abc import Callable
 
@@ -11,7 +12,7 @@ def run(argv: list[str], *, timeout: int = 5) -> subprocess.CompletedProcess[str
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
-def output(runner: Runner, argv: list[str], empty_errors: tuple[str, ...] = ()) -> str:
+def output(runner: Runner, argv: list[str], empty_errors: str | None = None) -> str:
     try:
         result = runner(argv)
     except subprocess.TimeoutExpired as exc:
@@ -21,7 +22,7 @@ def output(runner: Runner, argv: list[str], empty_errors: tuple[str, ...] = ()) 
     except (OSError, UnicodeError) as exc:
         raise SourceError(str(exc)) from exc
     if result.returncode:
-        if any(reason in result.stderr for reason in empty_errors):
+        if empty_errors and re.fullmatch(empty_errors, result.stderr.strip()):
             return ""
         raise SourceError(json_message(result.stderr) or json_message(result.stdout)
                           or (result.stderr or "").strip() or (result.stdout or "").strip()

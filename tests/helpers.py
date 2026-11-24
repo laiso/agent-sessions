@@ -70,10 +70,16 @@ def run_cli(
     args: list[str],
     env: dict[str, str] | None = None,
     timeout: float = 30.0,
+    *, instrumentation: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute ./agent-sessions as a black-box subprocess."""
+    command = [str(CLI_PATH)]
+    if instrumentation is not None:
+        # Instrument the module directly. The production launcher isolates its import path.
+        env = dict(env or os.environ, PYTHONPATH=os.pathsep.join(map(str, (REPO_ROOT / "src", instrumentation))))
+        command = [sys.executable, "-P", "-m", "agent_sessions"]
     return subprocess.run(
-        [str(CLI_PATH), *args],
+        [*command, *args],
         cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,
@@ -88,6 +94,30 @@ def write_executable(path: Path, body: str, mode: int = 0o755) -> Path:
     path.write_text(body, encoding="utf-8")
     path.chmod(mode)
     return path
+
+
+def composer_fixture(config):
+    """Source for the standalone fake CLIs' per-pane draft and transcript."""
+    state_path = config.with_suffix(".screen")
+    state_path.unlink(missing_ok=True)
+    return f"""
+from pathlib import Path
+state_path = Path({str(state_path)!r})
+screens = json.loads(state_path.read_text()) if state_path.exists() else {{}}
+def screen(pid):
+    return screens.setdefault(pid, {{"draft": "", "history": []}})
+def input_text(pid, data):
+    view = screen(pid)
+    if data == "\\n":
+        view["history"].append("› " + view["draft"])
+        view["draft"] = ""
+    else:
+        view["draft"] += data
+    state_path.write_text(json.dumps(screens))
+def visible(pid):
+    view = screen(pid)
+    return "\\n".join([*view["history"], "› " + view["draft"]])
+"""
 
 
 class FakeEnvironment:
@@ -175,6 +205,7 @@ class FakeEnvironment:
         body = f"""
 import json, sys
 cfg = json.loads(open({str(cfg_path)!r}, encoding="utf-8").read())
+{composer_fixture(cfg_path)}
 argv = sys.argv[1:]
 with open({str(log_path)!r}, "a", encoding="utf-8") as lf:
     lf.write(json.dumps(argv) + "\\n")
@@ -202,6 +233,9 @@ if argv[:2] == ["pane", "process-info"]:
 if argv[:2] == ["pane", "read"]:
     pane_id = argv[2] if len(argv) > 2 else ""
     entry = cfg["pane_read"].get(pane_id)
+    if entry is None and "visible" in argv:
+        print(visible(pane_id))
+        sys.exit(0)
     if entry is None:
         sys.stderr.write("cannot read pane\\n")
         sys.exit(1)
@@ -212,10 +246,11 @@ if argv[:2] == ["pane", "read"]:
         sys.stderr.write(err)
     sys.exit(rc)
 
-if len(argv) >= 2 and argv[0] == "pane" and argv[1] in ("send", "send-keys", "write", "input"):
+if len(argv) >= 2 and argv[0] == "pane" and argv[1] in ("send", "send-text", "send-keys", "write", "input"):
     if cfg["pane_send_rc"] != 0:
         sys.stderr.write(cfg["pane_send_stderr"])
         sys.exit(cfg["pane_send_rc"])
+    input_text(argv[2], "\\n" if argv[1] == "send-keys" else argv[3])
     sys.exit(0)
 
 sys.stderr.write(f"unexpected herdr args: {{argv!r}}\\n")
@@ -236,6 +271,7 @@ sys.exit(1)
         list_rc: int = 0,
         list_stderr: str = "",
         captures: dict[str, tuple[int, str, str]] | None = None,
+        capture_identity: str | None = None,
         send_rc: int = 0,
         send_stderr: str = "",
     ) -> Path:
@@ -247,6 +283,7 @@ sys.exit(1)
             "list_rc": list_rc,
             "list_stderr": list_stderr,
             "captures": captures or {},
+            "capture_identity": capture_identity,
             "send_rc": send_rc,
             "send_stderr": send_stderr,
         }
@@ -254,6 +291,7 @@ sys.exit(1)
         body = f"""
 import json, re, sys
 cfg = json.loads(open({str(cfg_path)!r}, encoding="utf-8").read())
+{composer_fixture(cfg_path)}
 argv = sys.argv[1:]
 with open({str(log_path)!r}, "a", encoding="utf-8") as lf:
     lf.write(json.dumps(argv) + "\\n")
@@ -272,11 +310,26 @@ if argv and argv[0] == "list-panes":
         print(re.sub(r"#\\{{([^}}]+)\\}}", repl, fmt))
     sys.exit(0)
 
+if argv[:2] == ["if-shell", "-F"]:
+    target, condition, command = argv[3:]
+    pane = next(p for p in cfg["panes"] if p["pane_id"] == target)
+    identity = cfg["capture_identity"] or ":".join(str(pane[k]) for k in ("pid", "start_time", "pane_pid"))
+    observed = identity + ":" + str(pane["pane_dead"])
+    if condition != "#{{==:#{{pid}}:#{{start_time}}:#{{pane_pid}}:#{{pane_dead}}," + observed + "}}":
+        sys.exit(0)
+    prefix = "display-message -p capture ; "
+    assert command.startswith(prefix)
+    print("capture")
+    argv = command[len(prefix):].split()
+
 if argv and argv[0] == "capture-pane":
     target = ""
     if "-t" in argv:
         target = argv[argv.index("-t") + 1]
     entry = cfg["captures"].get(target)
+    if entry is None and "-S" not in argv:
+        print(visible(target))
+        sys.exit(0)
     if entry is None:
         sys.stderr.write("can't find pane\\n")
         sys.exit(1)
@@ -293,6 +346,8 @@ if argv and argv[0] in ("send-keys", "load-buffer", "paste-buffer", "delete-buff
         sys.exit(cfg["send_rc"])
     if argv[0] == "set-buffer" and "-b" in argv:
         buf_name = argv[argv.index("-b") + 1]
+        data = argv[4]
+        input_text(argv[9], data[:-2] + ";" if data.endswith(chr(92) + ";") else data)
         print(f"{{buf_name}}-pasted")
     sys.exit(0)
 

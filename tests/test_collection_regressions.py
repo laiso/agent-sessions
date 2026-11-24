@@ -28,7 +28,7 @@ class CollectionTests(CliCase):
             self.assertEqual(result.stderr, f"agent-sessions: herdr: {expected}\n")
         self.fake.install_tmux_stub(panes=[pane()])
         self.assertIn(
-            "agent-sessions: herdr: plain", self.cli("send", "--dry-run", "demo", "hi").stderr
+            "agent-sessions: herdr: plain", self.cli("send", "--dry-run", "demo", "hi", code=3).stderr
         )
         self.cli("send", "herdr:missing", "hi", code=3)
         self.cli("send", "tmux:missing", "hi", code=4)
@@ -94,7 +94,9 @@ class CollectionTests(CliCase):
         self.assertIn("開発", self.cli("--source", "tmux", "--format", "json").stdout)
 
     def test_tmux_list_errors(self):
-        for msg in ("no server running", "error connecting"):
+        for msg in ("no server running", "error connecting to /tmp/tmux/default (No such file or directory)",
+                    # A stale socket left by a crashed server means no server, not a failure.
+                    "error connecting to /tmp/tmux/default (Connection refused)"):
             self.fake.install_tmux_stub(list_rc=1, list_stderr=msg)
             self.assertEqual(self.rows("--source", "tmux"), [])
         self.fake.install_script("tmux", "print('malformed')")
@@ -217,7 +219,9 @@ pathlib.Path.__truediv__=redirected
         tool = self.fake.install_tmux_stub(panes=[pane()], captures={"%1": (0, "\n\n", "")})
         self.assertEqual(self.cli("read", "tmux:%1").stdout, "No output.\n")
         self.assertEqual(
-            self.fake.tmux_calls()[-1], ["capture-pane", "-p", "-J", "-t", "%1", "-S", "-50"]
+            self.fake.tmux_calls()[-1], ["if-shell", "-F", "-t", "%1",
+                "#{==:#{pid}:#{start_time}:#{pane_pid}:#{pane_dead},10:100:999999:0}",
+                "display-message -p capture ; capture-pane -p -J -t %1 -S -50"]
         )
         raw = (
             b"old\n\n\xff"
@@ -225,7 +229,7 @@ pathlib.Path.__truediv__=redirected
             + b"\x1b]8;;url\x07link\x1b]8;;\x07\n\n"
         )
         self.intercept(
-            tool, f"if argv[0]=='capture-pane':\n    sys.stdout.buffer.write({raw!r}); sys.exit(0)"
+            tool, f"if argv[0]=='if-shell':\n    sys.stdout.buffer.write(b'capture\\n' + {raw!r}); sys.exit(0)"
         )
         body = self.rows("read", "--limit", "2", "tmux:%1")[0]["body"]
         self.assertEqual(body, "\n" + raw.decode(errors="replace").split("\n")[2])
@@ -242,3 +246,16 @@ pathlib.Path.__truediv__=redirected
             self.fake.herdr_calls()[-1],
             ["pane", "read", "w1:p1", "--source", "recent", "--lines", "2", "--format", "text"],
         )
+
+    def test_tmux_agent_waiting_finished_and_working_screens(self):
+        screens = ["›\n? for shortcuts", "─ Worked for 2m ─\n›",
+                   "• Working (12s • esc to interrupt)\n›", "agent starting",
+                   "─ Worked for 2m ─\n›", "❯ Yes\nEnter to confirm",
+                   "› previous question\n• streaming partial output", "› question\n• Answer\n›",
+                   "› explain esc to interrupt\n• Answer\n›", "› explain enter to confirm"]
+        panes = [pane(window_index=i, pane_id=f"%{i}", pane_current_command="codex",
+                      pane_active=int(i == 4), session_attached=1)
+                 for i in range(len(screens))]
+        self.fake.install_tmux_stub(panes=panes, captures={f"%{i}": (0, text, "") for i, text in enumerate(screens)})
+        self.assertEqual([r["status"] for r in self.rows("--source", "tmux", "--agents-only")],
+                         ["idle", "done", "running", "running", "idle", "blocked", "running", "done", "done", "idle"])

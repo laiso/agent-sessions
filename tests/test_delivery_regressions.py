@@ -44,10 +44,10 @@ class DeliveryTests(CliCase):
                 json.loads(result.stdout),
                 dict(sent=True, dry_run=False, enter=False, target=row, message=text),
             )
-            cmd = self.fake.tmux_calls()[-1]
+            cmd = [c for c in self.fake.tmux_calls() if c[0] == "set-buffer"][-1]
             self.assertEqual(cmd[3:5], ["--", text[:-1] + "\\;" if text.endswith(";") else text])
         self.cli("send", "tmux:%1", "--", "-abc")
-        text, enter = self.fake.tmux_calls()[-2:]
+        text, enter = [c for c in self.fake.tmux_calls() if c[0] == "set-buffer"][-2:]
         self.assertEqual([text[4], enter[4]], ["-abc", "\n"])
         self.assertNotEqual(text[2], enter[2])
         for cmd in (text, enter):
@@ -59,8 +59,7 @@ class DeliveryTests(CliCase):
 
     def test_herdr_delivery_stages(self):
         tool = self.fake.install_herdr_stub(snapshot=sample_herdr_snapshot())
-        send_ok = "if argv[:2] in (['pane','send-text'], ['pane','send-keys']): sys.exit(0)"
-        log = self.intercept(tool, send_ok)
+        log = self.intercept(tool, "")
         for text in (
             "--help",
             "-hello",
@@ -78,7 +77,7 @@ class DeliveryTests(CliCase):
                 self.assertEqual(calls[0][-1], "-")
         self.cli("send", "herdr:my-app/1", "hello", "world")
         self.assertEqual(
-            self.calls(log)[-2:],
+            [c for c in self.calls(log) if c[:2] in (["pane", "send-text"], ["pane", "send-keys"])][-2:],
             [
                 ["pane", "send-text", "w1:p1", "hello world"],
                 ["pane", "send-keys", "w1:p1", "enter"],
@@ -90,7 +89,7 @@ class DeliveryTests(CliCase):
             ("enter", "hi", "text sent, Enter failed", 2),
         ]:
             fail_code = f"if argv[-1] == {fail!r}:\n    print(json.dumps({{'error': {{'message': 'pane unavailable'}}}})); sys.exit(1)\n"
-            self.intercept(tool, fail_code + send_ok)
+            self.intercept(tool, fail_code)
             start = len(self.calls(log))
             result = self.cli("send", "herdr:w1:p1", "--", msg, code=6)
             self.assertEqual(result.stdout, "")
@@ -129,7 +128,7 @@ if argv[0] == 'delete-buffer' and {bool(cleanup)!r}:
                     "may remain" in result.stderr,
                     bool(cleanup and not cleanup.startswith("unknown buffer:")),
                 )
-                calls = self.calls(log)[start + 1 :]
+                calls = [c for c in self.calls(log)[start + 1:] if c[0] != "if-shell"]
                 self.assertEqual(
                     [c[0] for c in calls],
                     ["set-buffer"] * (1 if phase == "hi" else 2) + ["delete-buffer"],
@@ -161,3 +160,43 @@ subprocess.run=deliver
             self.assertIn(fragment, result.stderr)
         for private in ("private-message", "10:100:999999"):
             self.assertNotIn(private, result.stderr)
+
+    def test_enter_ack_without_submission_is_unconfirmed(self):
+        herdr = self.fake.install_herdr_stub(snapshot=sample_herdr_snapshot())
+        tmux = self.fake.install_tmux_stub(panes=[pane()])
+        hlog = self.intercept(herdr, "if argv[:2] == ['pane','send-keys']: sys.exit(0)")
+        tlog = self.intercept(tmux, "if argv[0] == 'set-buffer' and argv[4] == '\\n': print(argv[2]+'-pasted'); sys.exit(0)")
+        for target in ("herdr:w1:p1", "tmux:%1"):
+            result = self.cli("send", target, "still editing", code=6)
+            self.assertIn("未確認", result.stderr)
+            self.assertEqual(result.stdout, "")
+        self.assertEqual(sum(c[:2] == ["pane", "send-keys"] for c in self.calls(hlog)), 1)
+        self.assertEqual(sum(c[0] == "set-buffer" for c in self.calls(tlog)), 2)
+
+    def test_stage_requires_visible_change_even_with_transport_ack(self):
+        self.fake.install_tmux_stub(panes=[pane()], captures={"%1": (0, "› already here", "")})
+        result = self.cli("send", "--no-enter", "tmux:%1", "already here", code=6)
+        self.assertIn("未確認", result.stderr)
+        writes = [cmd for cmd in self.fake.tmux_calls() if cmd[0] == "set-buffer"]
+        self.assertEqual([cmd[4] for cmd in writes], ["already here"])
+
+    def test_old_transcript_and_changed_footer_are_not_submission(self):
+        from src.agent_sessions.observe import submitted
+        before = "› repeat\n• previous answer\n›\n? for shortcuts"
+        draft = "› repeat\n• previous answer\n› repeat\nusage 42%"
+        self.assertFalse(submitted(before, draft, "repeat"))
+        self.assertFalse(submitted(before, before.replace("shortcuts", "help"), "repeat"))
+        self.assertTrue(submitted(before, "› repeat\n• previous answer\n› repeat\n›", "repeat"))
+
+    def test_missing_initial_capture_prevents_delivery(self):
+        self.fake.install_tmux_stub(panes=[pane()], captures={"%1": (1, "", "unavailable")})
+        result = self.cli("send", "tmux:%1", "hello", code=6)
+        self.assertIn("nothing sent", result.stderr)
+        self.assertFalse(any(cmd[0] == "set-buffer" for cmd in self.fake.tmux_calls()))
+
+    def test_unrelated_output_suffix_cannot_confirm_short_input(self):
+        from src.agent_sessions.observe import staged, submitted
+        self.assertFalse(staged("Loading", "Ready", "y"))
+        self.assertFalse(submitted("Loading", "Ready\nReady", "y"))
+        self.assertTrue(staged("› prefix", "› prefixy", "y"))
+        self.assertTrue(submitted("prefix", "prefixy\nprefixy", "y"))

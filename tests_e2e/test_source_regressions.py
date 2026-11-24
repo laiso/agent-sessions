@@ -43,8 +43,9 @@ class LiveReferenceTests(unittest.TestCase):
             timeout=timeout,
         )
 
-    def cli(self, *args, env=None):
-        result = run_cli(list(args), env=self.env if env is None else env)
+    def cli(self, *args, env=None, observe=False):
+        result = run_cli(list(args), env=self.env if env is None else env,
+                         instrumentation=ROOT / "tests_e2e/observe" if observe else None)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
@@ -132,7 +133,6 @@ class LiveReferenceTests(unittest.TestCase):
             self.env,
             PATH="/usr/bin:/bin",
             XDG_CONFIG_HOME=str(config),
-            PYTHONPATH=str(ROOT / "tests_e2e/observe"),
             AGENT_SESSIONS_E2E_EXEC_LOG=str(log),
         )
         for name in ("AGENT_SESSIONS_ORCA", "ORCA_CLI_COMMAND"):
@@ -150,7 +150,7 @@ class LiveReferenceTests(unittest.TestCase):
         )
 
         started = time.monotonic()
-        result = self.command("./agent-sessions", "--source", "orca", "--format", "json", env=env)
+        result = run_cli(["--source", "orca", "--format", "json"], env=env, instrumentation=ROOT / "tests_e2e/observe")
         elapsed = time.monotonic() - started
         launches = (
             [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
@@ -212,12 +212,11 @@ class LiveReferenceTests(unittest.TestCase):
             simulate_darwin = system == "Darwin" and platform.system() == "Linux"
             env = dict(
                 self.env,
-                PYTHONPATH=str(ROOT / "tests_e2e/observe"),
                 AGENT_SESSIONS_E2E_EXEC_LOG=str(log),
                 AGENT_SESSIONS_E2E_FAKE_DARWIN="1" if simulate_darwin else "0",
             )
             log.write_text("")  # Each CLI invocation has its own observation window.
-            rows = json.loads(self.cli("--source", "tmux", "--format", "json", env=env))
+            rows = json.loads(self.cli("--source", "tmux", "--format", "json", env=env, observe=True))
             events = [json.loads(line) for line in log.read_text().splitlines()]
             launches = [(e[1], e[2]) for e in events if e[0] == "launch"]
             self.assertTrue(launches)
@@ -264,7 +263,6 @@ class LiveReferenceTests(unittest.TestCase):
         env = dict(
             self.discovery_env(),
             HOME=str(home),
-            PYTHONPATH=str(ROOT / "tests_e2e/observe"),
             AGENT_SESSIONS_E2E_EXEC_LOG=str(log),
         )
         # Orca alone also returns [] and exits 0 on failure. With the other
@@ -274,7 +272,7 @@ class LiveReferenceTests(unittest.TestCase):
             stub.write_text("#!/bin/sh\nexit 1\n")
             stub.chmod(0o700)
         env["PATH"] = f"{self.tmp}:{env['PATH']}"
-        rows = json.loads(self.cli("--source", "all", "--format", "json", env=env))
+        rows = json.loads(self.cli("--source", "all", "--format", "json", env=env, observe=True))
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots])
         expected = str(binary if binary == Path("/") / MAC_BUNDLE else home / MAC_BUNDLE)
         # The state query runs only when there are bots (same rule on every OS).

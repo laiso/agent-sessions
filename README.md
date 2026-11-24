@@ -29,7 +29,7 @@ orca    helper   home  codex  idle     Code review      ~/work/helper
 | `--no-header` | Omit the table header. |
 | `--width N` | Table width (untruncated when piped). |
 
-Herdr reports the agent’s internal status. In tmux, `running` indicates a non-shell foreground process, `shell` a shell prompt, and `dead` a dead pane.
+Herdr reports the agent’s internal status. For recognized agents in tmux, list reads the visible screen. An input prompt indicates `idle`. A visible completed turn at an unfocused prompt indicates `done`. A recognized permission dialog indicates `blocked`. This is a snapshot estimate: tmux does not supply Herdr’s history of which turns the user has seen. Busy, unreadable, and unrecognized agent screens retain `running`. Shells and exited panes retain `shell` and `dead`.
 
 Each list JSON object contains `source`, `session`, `pane`, `pane_id`, `agent`, `status`, `command`, `cwd`, `focused`, and `specialty`.
 
@@ -125,7 +125,7 @@ known chat or run appear as `bot:NAME`. Other handles appear verbatim. Mail addr
 whose bot has never dispatched a worker cannot be attributed through that run. Messages older
 than the 1000-message inbox window are unavailable. An empty mailbox produces `[]` in JSON.
 
-A missing tmux server is a readable source with zero panes, so a named tmux read exits with `4`. A failed source query exits with `3` when none of the requested sources can be read.
+A missing tmux server is a readable source with zero panes, so a named tmux read exits with `4`. Unprefixed reads and sends exit with `3` if an installed pane backend fails to return its inventory. Use a `herdr:` or `tmux:` prefix to select the backend explicitly.
 
 | Read exit code | Meaning |
 |---|---|
@@ -155,7 +155,9 @@ Would send to herdr my-app/1 (w1:p1) [agy, idle]
 
 Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. A pane that appears under several grouped tmux sessions is one pane, so its ID still resolves.
 
-Send returns a delivery receipt. Choose `--format text` (the default) or `--format json`. List and read offer tables for collections. Passing `--format table` to send exits with `2`. A JSON receipt contains `sent`, `dry_run`, `enter`, `target`, and `message`. The resolved `target` is a list-format JSON object. Candidate suggestions for a missing or ambiguous pane include its name and the full ID-based address.
+After sending, the CLI polls for confirmation without resending. Orca checks the acknowledged message ID, content and recipient against inbox records. For Herdr and tmux, the CLI captures the initial screen before sending any input. If that capture fails, it exits with code `6` and reports that nothing was sent. A new submitted transcript entry and fresh prompt, a returned shell prompt after the command, or a second terminal echo can confirm submission. With `--no-enter`, the check confirms visible staged text. A menu that immediately consumes a shortcut such as `y` can leave its delivery unconfirmed. A draft left in the composer, unreadable output, or an unsupported screen can result in exit `6` with `未確認`. Check the pane or mailbox before retrying. Dry runs only preview the target.
+
+A confirmed send returns a delivery receipt. Choose `--format text` (the default) or `--format json`. List and read offer tables for collections. Passing `--format table` to send exits with `2`. A JSON receipt contains `sent`, `dry_run`, `enter`, `target`, and `message`. The resolved `target` is a list-format JSON object. Candidate suggestions for a missing or ambiguous pane include its name and the full ID-based address.
 
 Message arguments are joined with one space. Put `--` before a message starting with a hyphen. Messages must contain non-whitespace text and may contain up to 4096 characters. Tabs, newlines and other control characters are rejected.
 
@@ -163,10 +165,10 @@ Message arguments are joined with one space. Put `--` before a message starting 
 |---|---|
 | 0 | Sent or previewed |
 | 2 | Invalid arguments or message |
-| 3 | All requested sources failed |
+| 3 | Source unavailable or inventory incomplete for an unprefixed target |
 | 4 | Target missing or dead pane |
 | 5 | Ambiguous target |
-| 6 | Sender terminal setup or delivery failed |
+| 6 | Sender terminal setup failed, or delivery could not be confirmed |
 
 ### Send to an Orca bot
 

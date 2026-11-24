@@ -78,9 +78,9 @@ def resolve(target: str, sessions: list[Session], *, allow_dead: bool = False) -
     if len(eligible) > 1:
         raise TargetError(5, f"ambiguous target: {label}", eligible)
     candidates = eligible or matches
-    if len(candidates) == 1 and candidates[0].source == "tmux":
-        pane_id = candidates[0].pane_id
-        aliases = [s for s in sessions if s.source == "tmux" and s.pane_id == pane_id]
+    if len(candidates) == 1:
+        selected = candidates[0]
+        aliases = [s for s in sessions if s.source == selected.source and s.pane_id == selected.pane_id]
         if len(aliases) > 1:
             view = shared_tmux_view(aliases[0])
             if view is None or any(shared_tmux_view(row) != view for row in aliases[1:]):

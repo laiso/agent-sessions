@@ -144,12 +144,22 @@ def mac_commands(runner: Runner) -> dict[str, str]:
             for pid in commands.keys() | newest.keys()}
 
 
+def validated_identity(target: Session) -> str:
+    if not isinstance(target, TmuxSession) or not re.fullmatch(r"%[0-9]+", target.pane_id):
+        raise SourceError("missing or invalid tmux pane identity")
+    # tmux can clear pane_pid after a retained pane exits.
+    pattern = r"[0-9]+:[0-9]+:[0-9]*" if target.status == "dead" else r"[0-9]+:[0-9]+:[0-9]+"
+    if not re.fullmatch(pattern, target.delivery_identity):
+        raise SourceError("missing or invalid tmux pane identity")
+    return target.delivery_identity
+
+
 def collect(runner: Runner, proc_reader: Callable[[str], list[str]] | None = None,
             *, system: str | None = None) -> list[Session]:
     fmt = SEPARATOR.join("#{" + name + "}" for name in FIELDS)
     fmt += SEPARATOR + DELIVERY_IDENTITY
     raw = output(runner, ["tmux", "list-panes", "-a", "-F", fmt],
-                 empty_errors=("no server running", "error connecting"))
+                 empty_errors=r"no server running(?: on .+)?|error connecting to .+ \((?:No such file or directory|Connection refused)\)")
     if not raw:
         return []
     system = platform.system() if system is None else system

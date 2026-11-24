@@ -32,9 +32,10 @@ class CliCase(unittest.TestCase):
         self.fake = FakeEnvironment()
         self.addCleanup(self.fake.cleanup)
         self.extra = {}
+        self.instrumentation = None
 
     def cli(self, *args, code=0):
-        result = run_cli(list(args), env=self.fake.env(self.extra))
+        result = run_cli(list(args), env=self.fake.env(self.extra), instrumentation=self.instrumentation)
         self.assertEqual(result.returncode, code, result.stderr)
         return result
 
@@ -43,10 +44,10 @@ class CliCase(unittest.TestCase):
 
     def customize_host(self, code):
         # Only the product Python process receives the emulated host settings.
-        setup = "import sys\nif sys.orig_argv[1:3] == ['-m', 'agent_sessions']:\n"
+        setup = "import sys\nif sys.orig_argv[2:4] == ['-m', 'agent_sessions']:\n"
         (self.fake.root / "sitecustomize.py").write_text(setup + indent(code, "    "))
         self.extra["PYTHONDONTWRITEBYTECODE"] = "1"
-        self.extra["PYTHONPATH"] = str(self.fake.root)
+        self.instrumentation = self.fake.root
 
     def intercept(self, tool, handler):
         """Handle selected fake-tool calls, forwarding the rest to its original stub."""

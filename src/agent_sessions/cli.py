@@ -2,7 +2,7 @@ import argparse
 import shutil
 import sys
 
-from . import herdr, orca, orca_sender, read, send, tmux
+from . import herdr, observe, orca, orca_sender, read, send, tmux
 from .model import Session, SourceError
 from .render import cell, render_json, render_table
 from .runner import Runner, run
@@ -16,17 +16,24 @@ def positive_width(value: str) -> int:
     return width
 
 
-def collect_sessions(source: str, runner: Runner) -> tuple[list[Session], bool]:
+def collect_sessions(source: str, runner: Runner, *, resolving: bool = False) -> tuple[list[Session], bool]:
     sessions = []
     readable = False
+    failed = set()
     for name, collect in (("herdr", herdr.collect), ("tmux", tmux.collect)):
         if source in ("all", name):
             try:
                 sessions.extend(collect(runner))
                 readable = True
             except SourceError as exc:
-                reason = " ".join(str(exc).splitlines())
+                if not isinstance(exc.__cause__, FileNotFoundError) or shutil.which(name) is not None:
+                    failed.add(name)
+                reason = cell(str(exc))
                 print(f"agent-sessions: {name}: {reason}", file=sys.stderr)
+    if resolving and source == "all" and failed:
+        print("agent-sessions: incomplete inventory; qualify the target with herdr: or tmux:",
+              file=sys.stderr)
+        return sessions, False
     return sessions, readable
 
 
@@ -64,13 +71,13 @@ def send_main(argv: list[str], runner: Runner | None) -> int:
                 orca_sender.manage("send", client=client, name=target.session,
                                    kind=args.orca_type or "question", subject=subject, message=message)
             except (OSError, SourceError) as exc:
-                print(f"agent-sessions: send: {cell(str(exc))}", file=sys.stderr)
+                print(f"agent-sessions: send: 未確認: {cell(str(exc))}", file=sys.stderr)
                 return 6
         print(send.result(target, message, False, args.dry_run, args.format))
         return 0
     runner = runner or run
     source, _ = split_target(args.target)
-    sessions, readable = collect_sessions(source, runner)
+    sessions, readable = collect_sessions(source, runner, resolving=True)
     if not readable:
         return 3
     try:
@@ -83,8 +90,8 @@ def send_main(argv: list[str], runner: Runner | None) -> int:
         try:
             send.transmit(target, message, enter, runner)
         except SourceError as exc:
-            reason = " ".join(str(exc).splitlines())
-            print(f"agent-sessions: send: {reason}", file=sys.stderr)
+            reason = cell(str(exc))
+            print(f"agent-sessions: send: 未確認: {reason}", file=sys.stderr)
             return 6
     print(send.result(target, message, enter, args.dry_run, args.format))
     return 0
@@ -103,7 +110,7 @@ def read_main(argv: list[str], runner: Runner | None) -> int:
         if source == "orca":
             records = read.messages(name, args.limit or 20, runner)
         else:
-            sessions, readable = collect_sessions(source, runner or run)
+            sessions, readable = collect_sessions(source, runner or run, resolving=True)
             if not readable:
                 return 3
             target = resolve(args.target, sessions, allow_dead=True)
@@ -152,6 +159,7 @@ def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
         except SourceError:
             if args.source == "orca":
                 readable = True
+    observe.update_tmux_status(sessions, runner)
     if args.agents_only:
         sessions = [s for s in sessions if s.agent or s.source == "orca"]
     if args.format == "json":

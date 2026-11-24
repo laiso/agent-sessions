@@ -1,13 +1,13 @@
 import json
-import re
 import unicodedata
 import uuid
 
+from . import observe, read
 from .model import Session, SourceError, TmuxSession
 from .render import cell
 from .runner import Runner, output
 from .target import address
-from .tmux import DELIVERY_IDENTITY
+from .tmux import DELIVERY_IDENTITY, validated_identity
 
 
 def message_text(words: list[str]) -> str:
@@ -39,9 +39,7 @@ def tmux_command(target: TmuxSession, data: str, buf: str) -> list[str]:
     # if-shell -F evaluates in the same server that executes the paste. Only
     # numeric identities and a generated buffer name enter the command string.
     pid = target.pane_id
-    expected = target.delivery_identity
-    if not re.fullmatch(r"%[0-9]+", pid) or not re.fullmatch(r"[0-9]+:[0-9]+:[0-9]+", expected):
-        raise SourceError("missing or invalid tmux pane identity")
+    expected = validated_identity(target)
     check = f"#{{==:{DELIVERY_IDENTITY}:#{{pane_dead}}:#{{pane_input_off}},{expected}:0:0}}"
     return ["tmux", "set-buffer", "-b", buf, "--", tmux_literal(data),
             ";", "if-shell", "-F", "-t", pid, check,
@@ -75,7 +73,7 @@ def tmux_paste(target: TmuxSession, data: str, runner: Runner) -> None:
         raise
 
 
-def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
+def send_input(target: Session, message: str, enter: bool, runner: Runner) -> None:
     pid = target.pane_id
     if target.source == "tmux":
         if not isinstance(target, TmuxSession):
@@ -112,6 +110,20 @@ def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None
             output(runner, ["herdr", "pane", "send-keys", pid, "enter"])
         except SourceError as exc:
             raise SourceError(f"text sent, Enter failed: {exc}") from exc
+
+
+def transmit(target: Session, message: str, enter: bool, runner: Runner) -> None:
+    def screen():
+        return read.clean(read.terminal_text(target, 100, runner, visible=True))
+
+    try:
+        before = screen()
+    except SourceError as exc:
+        raise SourceError(f"nothing sent: could not read initial pane: {exc}") from exc
+    send_input(target, message, enter, runner)
+    check = observe.submitted if enter else observe.staged
+    if not observe.observed(lambda: check(before, screen(), message)):
+        raise SourceError("pane did not confirm submission" if enter else "pane did not confirm staged text")
 
 
 def result(target: Session, message: str, enter: bool, dry_run: bool, fmt: str) -> str:

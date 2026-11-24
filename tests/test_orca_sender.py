@@ -19,6 +19,7 @@ class Service:
     def __init__(self):
         self.rows = {"term_existing": False}
         self.calls = []
+        self.inbox = []
         self.created = 0
         self.failure = None
         self.timeout = False
@@ -32,6 +33,8 @@ class Service:
             result = {"bots": [{"name": "sample", "id": "bot-id", "agent": "sample"}]}
         elif (group, command) == ("terminal", "list"):
             result = {"terminals": [dict(handle=h, orphaned=o, tabId="tab-" + h, title="dynamic") for h, o in self.rows.items()]}
+        elif command == "inbox":
+            result = {"messages": self.inbox}
         elif command == "create":
             assert args == ["--title", "agent-sessions", "--json"]
             time.sleep(.01)
@@ -48,15 +51,20 @@ class Service:
             assert args[:2] == ["--to", "bot:sample"]
             if self.timeout:
                 raise subprocess.TimeoutExpired(argv, 15)
-            result = {"messageId": "session"}
+            result = {}
         elif command == "send":
             assert args[:2] == ["--to", "bot:sample"] and args[2] == "--from"
             assert args[3].startswith("term_test") and self.rows[args[3]] is False
             if self.timeout:
                 raise subprocess.TimeoutExpired(argv, 15)
-            result = {"messageId": "test"}
+            result = {}
         else:
             raise AssertionError(argv)
+        if command == "send":
+            self.inbox.append(dict(id=str(len(self.inbox) + 1), to_handle=args[1],
+                                   from_handle=args[3] if "--from" in args else "orca_session_id:native",
+                                   subject=args[-4].removeprefix("--subject="), body=args[-3].removeprefix("--body=")))
+            result = {"message": dict(self.inbox[-1])}
         return subprocess.CompletedProcess(argv, 0, json.dumps(dict(ok=True, result=result)), "")
 
 
@@ -120,6 +128,43 @@ class SenderTests(SenderFixture):
         self.cli("orca-terminal", "close")
         self.assertFalse(self.state.exists())
         self.assertEqual(self.service.rows, {"term_existing": False})
+
+    def test_ack_requires_matching_inbox_record_without_resending(self):
+        for native in (False, True):
+            for mode in ("missing", "old-id", "wrong-recipient", "delayed"):
+                with self.subTest(native=native, mode=mode):
+                    service = Service()
+                    polls = []
+                    def runner(argv):
+                        reply = service(argv) if argv[2] != "chats" else subprocess.CompletedProcess(
+                            argv, 0, '{"ok":true,"result":{"chats":[]}}', "")
+                        if argv[2] == "inbox":
+                            polls.append(True)
+                            rows = [dict(row) for row in service.inbox]
+                            if mode == "missing" or mode == "delayed" and len(polls) == 1:
+                                rows = []
+                            elif mode == "old-id":
+                                rows[0]["id"] = "older"
+                            elif mode == "wrong-recipient":
+                                rows[0]["to_handle"] = "bot:another"
+                            reply.stdout = json.dumps(dict(ok=True, result={"messages": rows}))
+                        return reply
+                    self.service = runner
+                    with patch.object(orca_sender, "orca_session", return_value=native), patch("time.sleep"):
+                        result = self.cli("send", "orca:sample", "hello", code=0 if mode == "delayed" else 6)
+                    self.assertIn("Sent to" if mode == "delayed" else "未確認", result)
+                    self.assertEqual(sum(cmd == "send" for cmd, _ in service.calls), 1)
+
+    def test_delivery_receipt_resolves_chat_and_dispatch_run(self):
+        row = dict(id="message", subject="subject", body="body", from_handle="term_sender")
+        dispatch = dict(from_handle="orca_session_id:chat", to_handle="dispatch:worker", run_id="run-id")
+        def query(key, *args):
+            return [row, dispatch] if key == "messages" else [{"id": "chat"}]
+        for recipient, expected in (("orca_session_id:chat", True), ("run:run-id", True),
+                                    ("run:other", False), ("orca_session_id:other", False)):
+            row["to_handle"] = recipient
+            self.assertEqual(orca_sender.inbox_receipt(query, "sample", "message", "subject", "body",
+                                                      "term_sender"), expected)
 
     def test_unavailable_or_untrusted_state(self):
         self.cli("send", "orca:sample", "hi")
@@ -185,7 +230,7 @@ class SenderTests(SenderFixture):
         def service(argv):
             if argv[1:3] == ["orchestration", "inbox"]:
                 send, = [args for cmd, args in self.service.calls if cmd == "send"]
-                result = {"messages": [dict(from_handle=send[3], to_handle="run:sample",
+                result = {"messages": [dict(id="1", from_handle=send[3], to_handle="bot:sample",
                                             subject=send[6].removeprefix("--subject="),
                                             body=send[7].removeprefix("--body="))]}
                 return subprocess.CompletedProcess(argv, 0, json.dumps(dict(ok=True, result=result)), "")
@@ -222,7 +267,8 @@ class SessionModeTests(SenderFixture):
         self.assertEqual(self.service.calls, [
             ("list", ["--json"]),
             ("send", ["--to", "bot:sample", "--type", "question",
-                      "--subject=agent-sessions: hi", "--body=hi", "--json"]),
+                      "--subject=agent-sessions: hi", "--body=hi", "--full", "--json"]),
+            ("inbox", ["--json", "--full", "--limit", "1000"]),
         ])
         self.assertFalse(self.state.parent.exists())
 
