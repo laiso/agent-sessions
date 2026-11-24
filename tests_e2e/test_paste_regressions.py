@@ -112,3 +112,17 @@ if argv[0]=='delete-buffer' or (argv[0]=='set-buffer' and (argv[4]=='\\n')=={ent
         )
         self.send()
         self.assertIn(r"-例\;", self.server.tmux("capture-pane", "-p", "-t", "%0").stdout)
+
+    def test_grouped_sessions_share_only_the_target_pane(self):
+        self.server.tmux("new-session", "-d", "-s", "linked", "-t", "safe")
+        other = self.server.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%0", "cat").stdout.strip()
+        for target in ("tmux:%0", "tmux:safe:0.0", "tmux:linked:0.0"):
+            preview = run_cli(["send", "--dry-run", target, "shared marker"], env=self.env)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertIn("(%0)", preview.stdout)
+        sent = run_cli(["send", "tmux:%0", "shared marker"], env=self.env)
+        self.assertEqual(sent.returncode, 0, sent.stderr)
+        for target in ("tmux:%0", "tmux:safe:0.0", "tmux:linked:0.0", "tmux:" + other):
+            read = run_cli(["read", target], env=self.env)
+            self.assertEqual(read.returncode, 0, read.stderr)
+            self.assertEqual("shared marker" in read.stdout, target != "tmux:" + other)

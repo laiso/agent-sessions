@@ -87,3 +87,52 @@ class SharedPaneTests(CliCase):
                                            pane(session_name="same", pane_id="%2", window_index=1)])
         result = self.cli("send", "--dry-run", "same", "hi", code=5)
         self.assertIn("(tmux:%1)", result.stderr)
+
+    def test_conflicting_or_unknown_aliases_do_not_read_or_send(self):
+        for delta in ({"pid": 20}, {"start_time": ""}, {"pane_pid": "0"}, {"pane_pid": "invalid"},
+                      {"pane_title": "different"}, {"pane_dead": 1}, {"pane_current_path": "/other"},
+                      {"pane_current_command": "cat"}, {"pane_index": 2}):
+            with self.subTest(delta=delta):
+                self.fake.install_tmux_stub(panes=[pane(session_name="alpha"),
+                                                   pane(session_name="beta", **delta)])
+                start = len(self.fake.tmux_calls())
+                for args in (["read", "tmux:%1"], ["send", "--dry-run", "tmux:%1", "hi"],
+                             ["send", "tmux:%1", "hi"]):
+                    result = self.cli(*args, code=5)
+                    self.assertEqual(result.stderr.count("(tmux:%1)"), 2)
+                self.assertTrue(all(c[0] == "list-panes" for c in self.fake.tmux_calls()[start:]))
+
+    def test_empty_or_malformed_pane_ids_do_not_merge(self):
+        for pid in ("", "%?", "unknown"):
+            with self.subTest(pid=pid):
+                self.fake.install_tmux_stub(panes=[pane(session_name=s, pane_id=pid)
+                                                   for s in ("alpha", "beta")])
+                self.cli("read", "tmux:" + pid, code=5)
+
+    def test_duplicate_herdr_ids_stay_ambiguous(self):
+        panes = [dict(workspace_id=w, pane_id="w1:p1", label="one") for w in ("a", "b")]
+        self.fake.install_herdr_stub(snapshot={"result": {"snapshot": {"panes": panes}}})
+        for args in (["read", "herdr:w1:p1"], ["send", "--dry-run", "herdr:w1:p1", "hi"]):
+            self.cli(*args, code=5)
+
+    def test_session_specific_view_selects_matching_name(self):
+        self.fake.install_tmux_stub(panes=[pane(session_name="alpha"), pane(session_name="beta",
+            window_index=7, session_attached=1, window_active=0)])
+        for target, expected in (("tmux:%1", "alpha"), ("tmux:beta:7.0", "beta")):
+            preview = self.rows("send", "--dry-run", target, "hi")
+            self.assertEqual((preview["target"]["session"], preview["target"]["pane_id"]),
+                             (expected, "%1"))
+
+    def test_matching_unknown_identities_cannot_identify_a_shared_pane(self):
+        for unknown in ("", "?", "0"):
+            self.fake.install_tmux_stub(panes=[pane(session_name=name, start_time=unknown)
+                                               for name in ("alpha", "beta")])
+            self.cli("read", "tmux:%1", code=5)
+            self.cli("send", "--dry-run", "tmux:%1", "hi", code=5)
+
+    def test_dead_shared_pane_remains_read_only(self):
+        self.fake.install_tmux_stub(panes=[pane(session_name=name, pane_dead=1)
+                                           for name in ("alpha", "beta")],
+                                    captures={"%1": (0, "finished", "")})
+        self.assertIn("finished", self.cli("read", "tmux:%1").stdout)
+        self.assertIn("dead", self.cli("send", "--dry-run", "tmux:%1", "hi", code=4).stderr)
