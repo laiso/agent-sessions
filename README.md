@@ -1,6 +1,6 @@
 # agent-sessions
 
-List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and send messages to panes.
+List Herdr and tmux panes alongside Orca bots—showing agent, status, foreground command, and working directory—and read their output or send messages to panes.
 
 Run the launcher from the repository with Python 3.11 or later. No Python packages are required.
 
@@ -46,7 +46,81 @@ Set `AGENT_SESSIONS_ORCA` to select a CLI explicitly. It takes precedence over `
 | Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/orca/linux-orca-cli-shim/orca` | `~/.local/opt/orca/orca.AppImage` |
 | macOS | `~/.local/bin/orca` (Orca Settings → General → Orca CLI) | `/Applications/Orca.app/Contents/Resources/bin/orca`, `~/Applications/Orca.app/Contents/Resources/bin/orca`, then the legacy paths `/Applications/Orca Desktop.app/Contents/MacOS/orca` and `~/Applications/Orca Desktop.app/Contents/MacOS/orca` (exact lowercase filename required) |
 
-Automatic candidates must resolve to executable regular files owned by the current user or root, without group or other write permission. If the registered shim reports `Orca CLI is unavailable`, the launcher retries that query once with the first eligible application. The only Orca queries are `bot list --json` and `worktree ps --json`, with a 15-second timeout each.
+Automatic candidates must resolve to executable regular files owned by the current user or root, without group or other write permission. If the registered shim reports `Orca CLI is unavailable`, the launcher retries that query once with the first eligible application. Listing uses `bot list --json` and `worktree ps --json`, with a 15-second timeout each.
+
+## Read a session
+
+`read` captures terminal output or reads an Orca bot’s messages without marking them read.
+Use the same pane addresses as for `send`, including dead panes. An unprefixed name searches
+Herdr and tmux. An Orca bot requires the explicit `orca:` prefix.
+
+```sh
+./agent-sessions read herdr:my-app/1
+./agent-sessions read --limit 10 tmux:demo
+./agent-sessions read --format json --limit 2 orca:helper
+```
+
+The default table displays a timestamp, message type, participants, optional ID and subject,
+and indented body. It strips terminal escapes and control characters from the body except
+newlines and tabs. JSON preserves the original text. The limit ranges from 1 to 1000.
+For terminals it counts lines (default 50) after trailing empty lines are removed.
+Each capture produces one record, even for an empty pane. For Orca it counts messages
+(default 20), returning the most recent matches in chronological order.
+
+All sources use the same JSON fields. These examples show a structured Orca message and a raw
+terminal capture from two separate reads.
+
+```json
+[
+  {
+    "source": "orca",
+    "target": "orca:helper",
+    "id": "msg_example",
+    "type": "question",
+    "structured": true,
+    "from": "bot:reviewer",
+    "to": "bot:helper",
+    "subject": "Test results",
+    "body": "Did the tests pass?",
+    "timestamp": "2026-01-01T09:00:00Z",
+    "thread_id": null
+  }
+]
+```
+
+```json
+[
+  {
+    "source": "tmux",
+    "target": "tmux:demo:0.0",
+    "id": null,
+    "type": "terminal-output",
+    "structured": false,
+    "from": "tmux:demo:0.0",
+    "to": null,
+    "subject": null,
+    "body": "Tests passed.\nReady.",
+    "timestamp": "2026-01-01T09:01:00Z",
+    "thread_id": null
+  }
+]
+```
+
+Orca reads the bot list, all bots’ chat lists, and the latest 1000 messages across mailboxes.
+A message matches when either participant is a chat of the requested bot or a run that bot
+coordinated. A dispatch from one of its chats identifies the coordinator. Participants with a
+known chat or run appear as `bot:NAME`. Other handles appear verbatim. Mail addressed to a run
+whose bot has never dispatched a worker cannot be attributed through that run. Messages older
+than the 1000-message inbox window are unavailable. An empty mailbox produces `[]` in JSON.
+
+| Read exit code | Meaning |
+|---|---|
+| 0 | Read succeeded, including empty results |
+| 2 | Invalid arguments |
+| 3 | Requested source unavailable, including an unreadable Orca inbox |
+| 4 | No matching target |
+| 5 | Ambiguous target |
+| 6 | Resolved pane could not be captured |
 
 ## Send a message
 
@@ -65,7 +139,7 @@ Would send to herdr my-app/1 (w1:p1) [agy, idle]
 > How is the build going? ⏎
 ```
 
-Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. Orca bots are list-only.
+Use `herdr:SESSION/PANE` or `herdr:PANE_ID` for Herdr. Use `tmux:SESSION` for the active pane, `tmux:SESSION:WINDOW.PANE` for an indexed pane, or `tmux:%ID` for a pane ID. Only name-based targets can omit the source prefix. IDs such as `w1:p1` and `%12` require it. Ambiguous matches print the candidates to stderr. Use an Orca bot as a target for `read`.
 
 Message arguments are joined with one space. Put `--` before a message starting with a hyphen. Messages must contain non-whitespace text and may contain up to 4096 characters. Tabs, newlines and other control characters are rejected.
 
@@ -88,7 +162,7 @@ python3 -m unittest discover -s tests
 E2E_REQUIRE_ALL=1 ./run-e2e-tests.sh
 ```
 
-The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test (E9) checks that the bundled CLI runs `bot list --json` once. An empty list completes E9 successfully. A nonempty list must be followed by one `worktree ps --json` query. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
+The live suite requires Herdr with at least one pane, tmux, and a running Orca installation whose application binary at a known location can list at least one bot. The macOS bundle discovery test (E9) checks that the bundled CLI runs `bot list --json` once. An empty list completes E9 successfully. A nonempty list must be followed by one `worktree ps --json` query. The read tests also require a Herdr pane with output and a `claude` bot with inbox messages. They compare the read flag for each returned message before and after the read. Missing prerequisites skip the affected tests. Strict mode fails on missing prerequisites and allows skips for scenarios specific to another OS.
 
 Live tests send no input to existing Herdr panes or Orca bots. Herdr is read or previewed with `send --dry-run`; Orca is queried read-only. Actual sends go only to a disposable pane on an isolated tmux server, which the suite removes afterward.
 

@@ -87,7 +87,7 @@ def optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def collect(runner: Runner | None = None) -> list[Session]:
+def reader(runner: Runner | None = None):
     if runner is None:
         runner = partial(run, timeout=15)
     candidates = cli_candidates(os.environ)
@@ -95,10 +95,10 @@ def collect(runner: Runner | None = None) -> list[Session]:
     if not cli:
         raise SourceError("Orca CLI unavailable")
 
-    def read(command: str, action: str, key: str) -> list[dict]:
+    def read(key: str, *args: str) -> list[dict]:
         nonlocal cli
         try:
-            return records(runner, [cli, command, action, "--json"], key)
+            return records(runner, [cli, *args], key)
         except SourceError as exc:
             if not str(exc).startswith("Orca CLI is unavailable"):
                 raise
@@ -106,13 +106,18 @@ def collect(runner: Runner | None = None) -> list[Session]:
             if fallback is None:
                 raise
             cli = fallback
-        return records(runner, [cli, command, action, "--json"], key)
+        return records(runner, [cli, *args], key)
 
-    bots = read("bot", "list", "bots")
+    return read
+
+
+def collect(runner: Runner | None = None) -> list[Session]:
+    read = reader(runner)
+    bots = read("bots", "bot", "list", "--json")
     if not bots:
         return []
     try:
-        worktrees = read("worktree", "ps", "worktrees")
+        worktrees = read("worktrees", "worktree", "ps", "--json")
     except SourceError:
         worktrees = []
     homes = {w["bot"]: w for w in worktrees

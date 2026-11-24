@@ -2,7 +2,7 @@ import argparse
 import shutil
 import sys
 
-from . import herdr, orca, send, tmux
+from . import herdr, orca, read, send, tmux
 from .model import Session, SourceError
 from .render import cell, render_json, render_table
 from .runner import Runner, run
@@ -66,14 +66,44 @@ def send_main(argv: list[str], runner: Runner) -> int:
     return 0
 
 
+def read_main(argv: list[str], runner: Runner | None) -> int:
+    parser = argparse.ArgumentParser(prog="agent-sessions read", allow_abbrev=False)
+    parser.add_argument("--format", choices=("table", "json"), default="table")
+    parser.add_argument("--limit", type=int, metavar="N", help="1–1000 messages (default 20) or lines (default 50)")
+    parser.add_argument("target")
+    args = parser.parse_args(argv)
+    if args.limit is not None and not 1 <= args.limit <= 1000:
+        parser.error("--limit must be between 1 and 1000")
+    source, name = split_target(args.target, reading=True)
+    try:
+        if source == "orca":
+            records = read.messages(name, args.limit or 20, runner)
+        else:
+            sessions, readable = collect_sessions(source, runner or run)
+            if not readable:
+                return 3
+            target = resolve(args.target, sessions, allow_dead=True)
+            records = [read.terminal(target, args.limit or 50, runner)]
+    except TargetError as exc:
+        print(f"agent-sessions: read: {exc}", file=sys.stderr)
+        return exc.code
+    except SourceError as exc:
+        print(f"agent-sessions: read: {cell(str(exc))}", file=sys.stderr)
+        return 3 if source == "orca" else 6
+    print(read.render(records, args.format))
+    return 0
+
+
 def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["read"]:
+        return read_main(argv[1:], runner)
     if argv[:1] == ["send"]:
         return send_main(argv[1:], runner or run)
     if argv[:1] == ["list"]:
         argv = argv[1:]
     parser = argparse.ArgumentParser(prog="agent-sessions", description="List Herdr and tmux panes and Orca bots.",
-                                     epilog="Use agent-sessions send --help to send a message.")
+                                     epilog="See agent-sessions read --help or agent-sessions send --help.")
     parser.add_argument("--source", choices=("all", "herdr", "tmux", "orca"), default="all")
     parser.add_argument("--format", choices=("table", "json"), default="table")
     parser.add_argument("--agents-only", action="store_true")

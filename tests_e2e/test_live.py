@@ -172,6 +172,88 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(launches, [[argv[0], argv] for argv in expected], diagnostics)
         self.assertCountEqual([r["session"] for r in rows], [b["name"] for b in bots], diagnostics)
 
+    def read_herdr(self):
+        for pane in self.snapshot()["panes"]:
+            pid = pane["pane_id"]
+            direct = self.command("herdr", "pane", "read", pid, "--source", "recent",
+                                  "--lines", "50", "--format", "text")
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            last = direct.stdout.rstrip("\n").split("\n")[-1]
+            if not last:
+                continue
+            rows = json.loads(self.cli("read", "--format", "json", "herdr:" + pid))
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertIs(row["structured"], False)
+            self.assertEqual(row["type"], "terminal-output")
+            if last in row["body"].split("\n"):
+                return row
+        self.fail("no Herdr pane retained a nonempty reference line between captures")
+
+    def read_tmux(self):
+        self.start_tmux()
+        pid = self.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", SESSION,
+                        "sh", "-c", "echo READ-MARKER; exec cat")
+        rows = json.loads(self.cli("read", "--format", "json", "tmux:" + pid))
+        self.assertEqual(len(rows), 1)
+        self.assertIn("READ-MARKER", rows[0]["body"].split("\n"))
+        return rows[0]
+
+    def read_orca(self):
+        binary = self.orca_binary()
+
+        def flags():
+            inbox = self.reference(str(binary), "orchestration", "inbox", "--json",
+                                   "--full", "--limit", "1000")
+            return {m["id"]: m["read"] for m in inbox["result"]["messages"]}
+
+        if "claude" not in [b["name"] for b in self.bots(binary=binary)]:
+            self.unavailable("read E2E requires an Orca bot named claude")
+        before = flags()
+        rows = json.loads(self.cli("read", "--format", "json", "orca:claude"))
+        limited = json.loads(self.cli("read", "--format", "json", "--limit", "3", "orca:claude"))
+        after = flags()
+        self.assertTrue(rows and limited, "expected mail for orca:claude")
+        self.assertLessEqual(len(limited), 3)
+        for row in rows + limited:
+            self.assertIs(row["structured"], True)
+            mid = row["id"]
+            self.assertTrue(mid in before and mid in after, "message outside comparison window")
+            self.assertEqual(before[mid], after[mid], "read flag changed during observation")
+        return rows[0]
+
+    def test_R1_herdr_read(self):
+        self.read_herdr()
+
+    def test_R2_isolated_tmux_read(self):
+        self.read_tmux()
+
+    def test_R3_orca_read_and_flags(self):
+        self.read_orca()
+
+    def test_R4_missing_targets(self):
+        self.start_tmux()
+        self.snapshot()
+        self.bots()
+        for target in ("orca:no-such-bot", "tmux:no-such", "herdr:no-such/1"):
+            with self.subTest(target=target):
+                self.assertEqual(self.command("./agent-sessions", "read", target).returncode, 4)
+
+    def test_R5_unavailable_sources(self):
+        env = dict(self.env, AGENT_SESSIONS_ORCA=str(self.tmp / "missing-cli"))
+        self.assertEqual(self.command("./agent-sessions", "read", "orca:claude", env=env).returncode, 3)
+        for name in ("herdr", "tmux"):
+            stub = self.tmp / name
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o700)
+        env["PATH"] = str(self.tmp) + os.pathsep + env["PATH"]
+        self.assertEqual(self.command("./agent-sessions", "read", "no-such", env=env).returncode, 3)
+
+    def test_R6_common_read_schema(self):
+        keys = set(self.read_herdr())
+        self.assertEqual(keys, set(self.read_tmux()))
+        self.assertEqual(keys, set(self.read_orca()))
+
     @unittest.skipUnless(platform.system() == "Linux", "not Linux")
     def test_E3b_orca_appimage_only(self):
         self.check_appimage_route(stale_shim=False)

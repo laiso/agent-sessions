@@ -13,9 +13,9 @@ class TargetError(Exception):
         self.code = code
 
 
-def split_target(target: str) -> tuple[str, str]:
+def split_target(target: str, *, reading: bool = False) -> tuple[str, str]:
     prefix, sep, rest = target.partition(":")
-    if sep and prefix in ("herdr", "tmux"):
+    if sep and (prefix in ("herdr", "tmux") or (reading and prefix == "orca")):
         return prefix, rest
     return "all", target
 
@@ -47,7 +47,7 @@ def source_matches(source: str, value: str, explicit: bool, rows: list[Session])
     return [s for s in rows if s.session == value and isinstance(s, TmuxSession) and s.active]
 
 
-def resolve(target: str, sessions: list[Session]) -> Session:
+def resolve(target: str, sessions: list[Session], *, allow_dead: bool = False) -> Session:
     prefix, value = split_target(target)
     matches = []
     near = []
@@ -59,16 +59,16 @@ def resolve(target: str, sessions: list[Session]) -> Session:
         session, _, _ = value.rpartition(separator)
         near.extend(s for s in rows if s.session in (session, value))
 
-    live = [s for s in matches if not (s.source == "tmux" and s.status == "dead")]
+    eligible = matches if allow_dead else [s for s in matches if not (s.source == "tmux" and s.status == "dead")]
     label = cell(target)
-    if len(live) > 1:
-        raise TargetError(5, f"ambiguous target: {label}", live)
-    if live:
-        return live[0]
+    if len(eligible) > 1:
+        raise TargetError(5, f"ambiguous target: {label}", eligible)
+    if eligible:
+        return eligible[0]
     reason = f"target not found: {label}"
     if matches:
         reason += " (dead)"
-    # Suggest only panes that could be chosen instead: not dead, not the target itself.
+    # Only suggest alternatives that the current operation can select.
     hints = [s for s in near if s not in matches
-             and not (s.source == "tmux" and s.status == "dead")]
+             and (allow_dead or not (s.source == "tmux" and s.status == "dead"))]
     raise TargetError(4, reason, hints[:5])
