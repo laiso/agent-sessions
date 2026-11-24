@@ -162,7 +162,7 @@ Message arguments are joined with one space. Put `--` before a message starting 
 
 ## Supervisor skill
 
-The [agent-sessions-supervisor skill](skills/agent-sessions-supervisor/SKILL.md) guides an agent through listing workers, reading their output, and deciding when to follow up. To install it, copy the entire `skills/agent-sessions-supervisor` directory into your agent’s skills directory, such as `~/.codex/skills/` or `~/.claude/skills/`. Run the examples from the agent-sessions checkout.
+The [agent-sessions-supervisor skill](skills/agent-sessions-supervisor/SKILL.md) guides an agent through listing workers, reading their output, and deciding when to follow up. To install it, copy the entire `skills/agent-sessions-supervisor` directory into your agent’s skills directory, such as `~/.codex/skills/` or `~/.claude/skills/`. The skill's examples call `./agent-sessions`, so run them from the agent-sessions checkout (or replace that path with where you keep it).
 
 ## Tests
 
