@@ -67,8 +67,15 @@ For terminals it counts lines (default 50) after trailing empty lines are remove
 Each capture produces one record, even for an empty pane. For Orca it counts messages
 (default 20), returning the most recent matches in chronological order.
 
-All sources use the same JSON fields. These examples show a structured Orca message and a raw
-terminal capture from two separate reads.
+All sources use the same JSON fields. Use `structured` (or `type`) to tell the two kinds apart:
+
+- `structured: true` — an Orca message. `type` is Orca's message type (`handoff`, `question`,
+  `status`, `escalation`, `worker_done`, …) and `from`, `to` and `subject` are set.
+- `structured: false` — raw terminal text from Herdr or tmux. `type` is always
+  `terminal-output`, `body` is the captured text as-is, and `id`, `to`, `subject` and
+  `thread_id` are null. Interpret it yourself; it carries no message semantics.
+
+These examples show a structured Orca message and a raw terminal capture from two separate reads.
 
 ```json
 [

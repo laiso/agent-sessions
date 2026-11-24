@@ -77,7 +77,8 @@ def messages(name: str, limit: int, runner: Runner | None) -> list[dict]:
 def capture(argv: list[str]) -> subprocess.CompletedProcess[str]:
     # text=True would translate embedded carriage returns in the raw JSON body.
     result = subprocess.run(argv, capture_output=True, timeout=5)
-    return subprocess.CompletedProcess(argv, result.returncode, result.stdout.decode(),
+    # Raw terminal text may hold bytes that are not UTF-8; never fail the read for them.
+    return subprocess.CompletedProcess(argv, result.returncode, result.stdout.decode(errors="replace"),
                                        result.stderr.decode(errors="replace"))
 
 

@@ -137,3 +137,14 @@ class ReadTests(unittest.TestCase):
                 self.invoke("--limit", limit, "orca:a")
             self.assertEqual(error.exception.code, 2)
         self.assertFalse(self.calls)
+
+
+class CaptureDecodingTests(unittest.TestCase):
+    def test_non_utf8_terminal_bytes_do_not_fail_the_read(self):
+        import sys
+        from agent_sessions import read
+        argv = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\n\\xff\\xfe bad\\n')"]
+        result = read.capture(argv)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.split("\n")[0], "ok")
+        self.assertIn("�", result.stdout)
