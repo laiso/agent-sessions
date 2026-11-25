@@ -176,9 +176,11 @@ Preview the exact bot and body with `./agent-sessions send --dry-run orca:helper
 
 Run from inside an Orca agent session or Orca terminal (`ORCA_AGENT_SESSION_ID` or `ORCA_TERMINAL_HANDLE` is set), agent-sessions sends as that session: Orca refuses a different sender there, no terminal is created, and replies come back to that session. Orca also refuses a message to the session's own chat (exit `6`). An older structured session with only the Orca session marker also uses native sender resolution. If Orca cannot identify the caller, delivery fails with exit `6`. From a plain shell, the first delivery creates a dedicated Orca terminal; later deliveries reuse its saved handle after checking the terminal list. A missing or orphaned handle requires a new terminal. Dry-run checks the bot list only. Use `./agent-sessions orca-terminal status` to inspect the saved handle and `./agent-sessions orca-terminal close` to close its tab and remove its state. The private state file is `${XDG_STATE_HOME:-~/.local/state}/agent-sessions/orca-sender.json` (0600 in a 0700 directory). Keep the same state home and Orca CLI for this sender. Concurrent deliveries and close share a lock. If delivery is unconfirmed, check the mailbox before considering another send. A reply to a message sent from the dedicated terminal is addressed to that terminal, so keep it open until replies arrive; `orca-terminal close` makes later replies to it undeliverable.
 
-## Supervisor skill
+## Skills
 
 The [agent-sessions-supervisor skill](skills/agent-sessions-supervisor/SKILL.md) guides an agent through listing workers, reading their output, and deciding when to follow up. To install it, copy the entire `skills/agent-sessions-supervisor` directory into your agent’s skills directory, such as `~/.codex/skills/` or `~/.claude/skills/`. The skill's examples call `./agent-sessions`, so run them from the agent-sessions checkout (or replace that path with where you keep it).
+
+The [review-fix-loop skill](skills/review-fix-loop/SKILL.md) runs a mutual review-and-fix loop between you and another agent until an agreed stop condition holds, using agent-sessions to talk to the other agent. Install it the same way.
 
 ## Tests
 
